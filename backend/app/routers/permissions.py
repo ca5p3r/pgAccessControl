@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import logging
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
+from ..audit import audited
 from ..db import PoolManager
 from ..deps import get_pools
 from ..schemas import ApplyRequest, ApplyResult
 from ..security import require_auth
 from ..services import permissions as svc
 
-log = logging.getLogger("pgac.audit")
 router = APIRouter(tags=["permissions"])
 
 
@@ -62,13 +61,22 @@ async def default_privileges(
 async def apply(
     role: str,
     body: ApplyRequest,
+    request: Request,
     pools: PoolManager = Depends(get_pools),
     actor: str = Depends(require_auth),
 ) -> ApplyResult:
-    # One transaction: either every change is applied or none is.
-    async with pools.connection(body.database) as conn:
-        statements, applied = await svc.apply_changes(conn, role, body.changes, dry_run=body.dry_run)
-    if applied:
-        for stmt in statements:
-            log.info("%s on %s: %s", actor, body.database, stmt)
+    if body.dry_run:  # previews change nothing, so they are not audited
+        async with pools.connection(body.database) as conn:
+            statements, applied = await svc.apply_changes(conn, role, body.changes, dry_run=True)
+        return ApplyResult(statements=statements, applied=applied)
+
+    grants = sum(c.action == "grant" for c in body.changes)
+    revokes = len(body.changes) - grants
+    async with audited(request, actor, "permission.apply", target=role, target_type="permission", database=body.database) as a:
+        parts = [f"{n} {word}{'' if n == 1 else 's'}" for n, word in ((grants, "grant"), (revokes, "revoke")) if n]
+        a.summary = f"{', '.join(parts)} for {role} in {body.database}"
+        a.details = {"grants": grants, "revokes": revokes}
+        # One transaction: either every change is applied or none is.
+        async with pools.connection(body.database) as conn:
+            statements, applied = await svc.apply_changes(conn, role, body.changes, dry_run=False)
     return ApplyResult(statements=statements, applied=applied)

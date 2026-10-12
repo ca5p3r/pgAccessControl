@@ -31,9 +31,14 @@ services:
       SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (e.g. openssl rand -hex 32)}
       SESSION_TTL_MINUTES: ${SESSION_TTL_MINUTES:-480}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # --- Audit history (stored in the appdata volume) ---
+      AUDIT_ENABLED: ${AUDIT_ENABLED:-true}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-365}
       # --- Server ---
       WORKERS: ${WORKERS:-1}
       LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - appdata:/data
     extra_hosts:
       # Lets PG_HOST=host.docker.internal reach a PostgreSQL running on the Docker host (Linux too).
       - "host.docker.internal:host-gateway"
@@ -63,4 +68,5 @@ services:
       retries: 5
 
 volumes:
+  appdata:
   pgdata:

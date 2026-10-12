@@ -24,13 +24,17 @@ RUN pip install -r requirements.txt
 COPY backend/app ./app
 COPY --from=frontend /build/dist ./static
 
-# Run unprivileged.
-RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app
+# Run unprivileged. /data holds the audit history (mount a volume here so it survives upgrades).
+RUN useradd --system --uid 10001 --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir /data && chown app:app /data
 USER app
 
 ENV STATIC_DIR=/app/static \
+    AUDIT_DB_PATH=/data/audit.db \
     HOST=0.0.0.0 \
     PORT=8000
+
+VOLUME ["/data"]
 
 EXPOSE 8000
 

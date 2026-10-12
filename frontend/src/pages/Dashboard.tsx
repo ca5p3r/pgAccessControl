@@ -1,8 +1,9 @@
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowRight, Crown, Database, KeyRound, ShieldAlert, UserRound, Users } from "lucide-react";
-import { useMeta, useRoles, useStats } from "../api/hooks";
+import { AlertTriangle, ArrowRight, Crown, Database, History, KeyRound, ShieldAlert, UserRound, Users } from "lucide-react";
+import { useAudit, useMeta, useRoles, useStats } from "../api/hooks";
 import { Avatar, ErrorNote, Notice, Spinner } from "../components/ui";
 import { RoleBadges } from "../components/roles";
+import { ActionBadge, timeAgo } from "../components/activity";
 
 function Stat({ icon, label, value, tone, to }: { icon: JSX.Element; label: string; value: number | string; tone: string; to?: string }) {
   const body = (
@@ -21,6 +22,7 @@ export function Dashboard() {
   const stats = useStats();
   const meta = useMeta();
   const privileged = useRoles({ kind: "all", limit: 200 });
+  const recent = useAudit({}, 0, 6);
   const risky = (privileged.data?.items ?? []).filter((r) => r.superuser || r.createrole).slice(0, 6);
 
   if (stats.isLoading) return <Spinner label="Connecting to PostgreSQL…" />;
@@ -48,6 +50,30 @@ export function Dashboard() {
 
       {meta.data && !meta.data.can_create_roles && (
         <Notice tone="warn">The connected PostgreSQL account (<strong>{meta.data.connected_as}</strong>) cannot create roles. Use a superuser or a CREATEROLE account to manage users.</Notice>
+      )}
+
+      {meta.data?.audit_enabled && (
+        <section className="card">
+          <div className="card-head">
+            <div className="card-icon"><History size={18} /></div>
+            <div className="grow">
+              <h3>Recent activity</h3>
+              <p className="muted">The latest changes made through this app.</p>
+            </div>
+            <Link to="/activity" className="link-arrow">View all <ArrowRight size={15} /></Link>
+          </div>
+          {!recent.data?.items.length ? <p className="muted">No activity recorded yet.</p> : (
+            <ul className="list">
+              {recent.data.items.map((e) => (
+                <li key={e.id} className="list-row static">
+                  <ActionBadge action={e.action} />
+                  <span className={`grow ${e.status === "failed" ? "danger-text" : ""}`}>{e.summary}</span>
+                  <span className="muted small nowrap">{e.actor} · {timeAgo(e.ts)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
       <div className="grid-2 gap-lg">

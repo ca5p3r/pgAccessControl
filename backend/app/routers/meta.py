@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ..db import PoolManager
 from ..deps import get_pools
@@ -10,7 +10,7 @@ router = APIRouter(tags=["meta"])
 
 
 @router.get("/meta")
-async def meta(pools: PoolManager = Depends(get_pools)) -> dict:
+async def meta(request: Request, pools: PoolManager = Depends(get_pools)) -> dict:
     """Server facts the UI needs: version, who we are connected as, available privilege names."""
     async with pools.connection() as conn:
         cur = await conn.execute(
@@ -28,6 +28,7 @@ async def meta(pools: PoolManager = Depends(get_pools)) -> dict:
         "host": pools.settings.pg_host,
         "port": pools.settings.pg_port,
         "database": pools.settings.pg_database,
+        "audit_enabled": request.app.state.audit.enabled,
         "privileges": privilege_catalog(version_num),
     }
 

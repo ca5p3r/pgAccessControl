@@ -15,6 +15,7 @@ from typing import Any
 import psycopg
 from psycopg import sql
 
+from ..audit import add_statements
 from ..errors import AppError, NotFound
 from ..schemas import PermissionChange
 
@@ -379,6 +380,7 @@ async def apply_changes(
     rendered = [s.as_string(conn).strip() + ";" for s in statements]
     if dry_run:
         return rendered, False
+    add_statements(rendered)  # recorded before running so a failed attempt still shows what was tried
     for stmt in statements:
         await conn.execute(stmt)
     return rendered, True

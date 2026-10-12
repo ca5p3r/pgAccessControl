@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from ..audit import log_event
 from ..config import get_settings
 from ..security import (
     COOKIE_NAME,
@@ -40,8 +41,10 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
         return {"authenticated": True}
     if not verify_credentials(settings, body.username, body.password):
         record_login_failure(client)
+        await log_event(request, body.username[:100], "auth.login_failed", "Failed sign-in attempt", "failed")
         raise HTTPException(401, "Invalid username or password")
     clear_login_failures(client)
+    await log_event(request, body.username, "auth.login", "Signed in")
     response.set_cookie(
         COOKIE_NAME,
         create_token(settings, body.username),
@@ -55,6 +58,9 @@ async def login(body: LoginRequest, request: Request, response: Response) -> dic
 
 
 @router.post("/logout")
-async def logout(response: Response) -> dict:
+async def logout(request: Request, response: Response) -> dict:
+    user = read_token(get_settings(), request.cookies.get(COOKIE_NAME))
+    if user:
+        await log_event(request, user, "auth.logout", "Signed out")
     response.delete_cookie(COOKIE_NAME, path="/")
     return {"authenticated": False}

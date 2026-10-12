@@ -6,6 +6,7 @@ Configure with TEST_PG_HOST / TEST_PG_PORT / TEST_PG_USER / TEST_PG_PASSWORD (su
 import asyncio
 import os
 import sys
+import tempfile
 
 import psycopg
 import pytest
@@ -27,6 +28,7 @@ os.environ.update(
     PG_PASSWORD=PG["password"],
     AUTH_ENABLED="false",
     LOG_LEVEL="warning",
+    AUDIT_DB_PATH=os.path.join(tempfile.mkdtemp(prefix="pgac-audit-"), "audit.db"),
 )
 
 from fastapi.testclient import TestClient  # noqa: E402

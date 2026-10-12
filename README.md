@@ -10,6 +10,9 @@ A web console for managing **PostgreSQL roles, users and permissions** — React
 | See what a user or role can **currently** do          | Permissions grid — direct grants and inherited ones, with the source role |
 | Set **default privileges** for future objects         | Permissions → *Default privileges*                       |
 | Manage what **everyone** (PUBLIC) can do              | *Permissions* → PUBLIC                                   |
+| See **who changed what**, with the SQL and before/after values | *Activity* page, and a role's **Activity** tab  |
+| Find out **who can access** a table, view, sequence, function, schema or database | *Reports* → Who has access? (also a link on every grid row) |
+| **Export** permissions as SQL, CSV or JSON (whole database or one user/role) | *Reports* → Export, or the Export button on a role's Permissions tab |
 
 ## Quick start (Docker)
 
@@ -42,6 +45,9 @@ To administer an existing server, set `PG_HOST` (use `host.docker.internal` for 
 | `SECRET_KEY` | random per start | Signs session cookies — **set it** for Docker/multi-worker |
 | `SESSION_TTL_MINUTES` | `480` | Session lifetime |
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
+| `AUDIT_ENABLED` | `true` | Store audit history (SQLite) |
+| `AUDIT_DB_PATH` | `data/audit.db` (`/data/audit.db` in Docker) | Where history is stored; Docker mounts the `appdata` volume at `/data` |
+| `AUDIT_RETENTION_DAYS` | `365` | Older entries are deleted daily; `0` keeps everything |
 | `WORKERS`, `LOG_LEVEL`, `HOST`, `PORT` | `1`, `info`, `0.0.0.0`, `8000` | Server |
 | `CORS_ORIGINS` | – | Only if the UI is served from another origin |
 
@@ -73,6 +79,20 @@ TEST_PG_HOST=127.0.0.1 TEST_PG_PORT=5432 TEST_PG_USER=postgres TEST_PG_PASSWORD=
 
 Frontend: `npm run build` runs the TypeScript type-check.
 
+## Activity (audit history)
+
+Every create, update, delete, membership change, permission change, export and sign-in made **through this app** is stored with: who (and from which IP), when, a readable summary, the exact SQL that ran (passwords redacted), before/after values, and the error if it failed. Failed attempts are kept too, including the SQL that was tried. Previews ("Review & apply") change nothing and are not recorded.
+
+* **Activity page**: search and filter by type, person, outcome and date range; click a row for details; switch on *Live* to follow changes; download the filtered list as CSV or JSON.
+* **Per role**: the *Activity* tab shows the history of one user or role. The dashboard shows the latest entries.
+* **Monitoring from outside**: each entry is also written to the `pgac.audit` logger as one JSON line, so Loki / ELK / Datadog / CloudWatch can collect it and alert on patterns (e.g. a new superuser).
+* **Limits**: changes made directly with `psql` or other tools are not visible here. To capture those, enable PostgreSQL's own `pgaudit` extension or `log_statement = 'ddl'`.
+
+## Reports and exports
+
+* **Who has access?** Pick an object and see every user and role that can use it and *why*: a direct grant, PUBLIC, inherited from a named role, ownership, or superuser. Access is computed by PostgreSQL itself (`has_*_privilege`), so it always matches what the server would allow. Export the result as CSV.
+* **Export**: a **SQL script** (`CREATE ROLE`, memberships, `GRANT`, `ALTER DEFAULT PRIVILEGES`) that can be replayed on another server, a **CSV** of one dataset (privileges, roles, memberships, defaults) for access reviews, or a **JSON** document. Limit it to one user/role or PUBLIC. Passwords are never exported, only explicit grants are listed (not implicit owner privileges), and revokes of default PUBLIC privileges are not reproduced. CSV cells starting with `=`, `+`, `-` or `@` are prefixed with `'` so spreadsheets don't execute role names as formulas.
+
 ## How PostgreSQL semantics map to the UI
 
 * **Users and roles are the same thing.** A *user* is a role with `LOGIN`; a *role* here is a role without it (a group). Toggling "Can log in" converts one to the other.
@@ -90,7 +110,7 @@ Not covered: column-level privileges, row-level-security policies, large-object 
 * Every identifier is composed with `psycopg.sql.Identifier`; values with `Literal`. Privilege names are checked against a per-object-type allowlist (aware of the server version, e.g. `MAINTAIN` on 17+). Functions are addressed by `oid` and their signature is read from the catalog, never from the client.
 * Permission edits are staged in the UI, shown as the exact SQL (**Review & apply**), then executed in **one transaction** — all or nothing.
 * Passwords are sent to PostgreSQL as a pre-computed **SCRAM-SHA-256 verifier**, so plaintext never appears in server logs or `pg_stat_activity` (non-ASCII passwords fall back to server-side hashing).
-* UI login uses a signed JWT in an `HttpOnly; SameSite=Strict` cookie; failed logins are throttled. Mutations are written to the `pgac.audit` log (who did what; passwords are never logged).
+* UI login uses a signed JWT in an `HttpOnly; SameSite=Strict` cookie; failed logins are throttled. Every mutation is stored in the audit history (see *Activity*); passwords are never stored or logged.
 * The container runs as a non-root user with a read-only filesystem and all capabilities dropped.
 
 **Performance**
@@ -101,7 +121,7 @@ Not covered: column-level privileges, row-level-security policies, large-object 
 
 ## API
 
-Interactive docs at `/api/docs`. Main resources: `GET/POST /api/roles`, `GET/PATCH/DELETE /api/roles/{name}`, `PUT /api/roles/{name}/member-of`, `PUT /api/roles/{name}/members`, `GET /api/roles/{name}/dependencies`, `GET /api/permissions/{role}/objects`, `GET /api/permissions/{role}/default-privileges`, `POST /api/permissions/{role}/apply` (`dry_run` supported), `GET /api/databases`, `GET /api/schemas`, `GET /api/meta`, `GET /api/health`.
+Interactive docs at `/api/docs`. Main resources: `GET/POST /api/roles`, `GET/PATCH/DELETE /api/roles/{name}`, `PUT /api/roles/{name}/member-of`, `PUT /api/roles/{name}/members`, `GET /api/roles/{name}/dependencies`, `GET /api/permissions/{role}/objects`, `GET /api/permissions/{role}/default-privileges`, `POST /api/permissions/{role}/apply` (`dry_run` supported), `GET /api/audit` (+ `/facets`, `/export`), `GET /api/access-report`, `GET /api/objects`, `GET /api/export`, `GET /api/databases`, `GET /api/schemas`, `GET /api/meta`, `GET /api/health`.
 
 ## Project layout
 

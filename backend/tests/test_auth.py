@@ -38,6 +38,18 @@ def test_login_logout_cycle(secured):
     assert secured.get("/api/roles").status_code == 401
 
 
+def test_sign_ins_are_audited(secured):
+    secured.post("/api/auth/login", json={"username": "root", "password": "nope"})
+    secured.post("/api/auth/login", json={"username": "root", "password": "correct horse"})
+    items = secured.get("/api/audit", params={"action": "auth."}).json()["items"]
+    actions = [(i["action"], i["status"], i["actor"]) for i in items]
+    assert ("auth.login", "success", "root") in actions
+    assert ("auth.login_failed", "failed", "root") in actions
+    assert "correct horse" not in str(items) and "nope" not in str(items)
+    secured.post("/api/auth/logout")
+    assert secured.cookies.get("pgac_session") is None
+
+
 def test_tampered_cookie_rejected(secured):
     secured.cookies.set("pgac_session", "not-a-jwt")
     assert secured.get("/api/roles").status_code == 401

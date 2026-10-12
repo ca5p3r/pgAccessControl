@@ -11,6 +11,7 @@ from typing import Any
 import psycopg
 from psycopg import sql
 
+from ..audit import note, record_statement
 from ..db import PoolManager
 from ..errors import AppError, NotFound
 from ..schemas import (
@@ -27,6 +28,12 @@ from ..schemas import (
 from .scram import scram_sha256_verifier
 
 Conn = psycopg.AsyncConnection
+
+
+async def _exec(conn: Conn, stmt: sql.Composable) -> None:
+    """Run a mutating statement and hand it (redacted) to the active audit entry."""
+    record_statement(stmt, conn)
+    await conn.execute(stmt)
 
 _BASE_COLUMNS = """
     r.oid, r.rolname AS name, r.rolsuper, r.rolinherit, r.rolcreaterole, r.rolcreatedb, r.rolcanlogin,
@@ -226,10 +233,11 @@ def _password_option(password: str | None, remove: bool = False) -> sql.Composab
 
 
 async def _set_comment(conn: Conn, name: str, comment: str | None) -> None:
-    await conn.execute(
+    await _exec(
+        conn,
         sql.SQL("COMMENT ON ROLE {} IS {}").format(
             sql.Identifier(name), sql.Literal(comment) if comment else sql.SQL("NULL")
-        )
+        ),
     )
 
 
@@ -249,7 +257,7 @@ async def create_role(conn: Conn, data: RoleCreate) -> None:
     stmt = sql.SQL("CREATE ROLE {}").format(sql.Identifier(data.name))
     if options:
         stmt = sql.SQL("{} WITH {}").format(stmt, sql.SQL(" ").join(options))
-    await conn.execute(stmt)
+    await _exec(conn, stmt)
     if data.comment:
         await _set_comment(conn, data.name, data.comment)
     for parent in dict.fromkeys(data.member_of):
@@ -266,26 +274,27 @@ async def update_role(conn: Conn, name: str, data: RoleUpdate) -> str:
     if pw:
         options.append(pw)
     if options:
-        await conn.execute(
-            sql.SQL("ALTER ROLE {} WITH {}").format(sql.Identifier(name), sql.SQL(" ").join(options))
+        await _exec(
+            conn, sql.SQL("ALTER ROLE {} WITH {}").format(sql.Identifier(name), sql.SQL(" ").join(options))
         )
     if "comment" in data.model_fields_set:
         await _set_comment(conn, name, data.comment)
     final = name
     if data.rename_to and data.rename_to != name:
-        await conn.execute(
-            sql.SQL("ALTER ROLE {} RENAME TO {}").format(sql.Identifier(name), sql.Identifier(data.rename_to))
+        await _exec(
+            conn,
+            sql.SQL("ALTER ROLE {} RENAME TO {}").format(sql.Identifier(name), sql.Identifier(data.rename_to)),
         )
         final = data.rename_to
     return final
 
 
 async def _grant_role(conn: Conn, role: str, member: str) -> None:
-    await conn.execute(sql.SQL("GRANT {} TO {}").format(sql.Identifier(role), sql.Identifier(member)))
+    await _exec(conn, sql.SQL("GRANT {} TO {}").format(sql.Identifier(role), sql.Identifier(member)))
 
 
 async def _revoke_role(conn: Conn, role: str, member: str) -> None:
-    await conn.execute(sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(role), sql.Identifier(member)))
+    await _exec(conn, sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(role), sql.Identifier(member)))
 
 
 async def set_member_of(conn: Conn, name: str, roles: list[str]) -> None:
@@ -363,18 +372,21 @@ async def delete_role(pools: PoolManager, name: str, reassign_to: str | None) ->
     for dbname in sorted(targets):
         try:
             async with pools.connection(dbname) as conn:
+                note(f'in database "{dbname}"')
                 if reassign_to is not None:
-                    await conn.execute(
+                    await _exec(
+                        conn,
                         sql.SQL("REASSIGN OWNED BY {} TO {}").format(
                             sql.Identifier(name), sql.Identifier(reassign_to)
-                        )
+                        ),
                     )
                 # After the reassign only privileges / default ACLs / policies remain to be dropped.
-                await conn.execute(sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
+                await _exec(conn, sql.SQL("DROP OWNED BY {}").format(sql.Identifier(name)))
         except psycopg.Error as exc:
             raise AppError(
                 f'Cleaning up database "{dbname}" failed: {exc.diag.message_primary or exc}', 409
             ) from exc
 
     async with pools.connection() as conn:
-        await conn.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))
+        note("in the maintenance database")
+        await _exec(conn, sql.SQL("DROP ROLE {}").format(sql.Identifier(name)))

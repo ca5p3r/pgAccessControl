@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     session_ttl_minutes: int = 480
     cookie_secure: bool = False  # set true when served over HTTPS
 
+    # --- Audit history (SQLite file; mount a volume on its directory in Docker) ---
+    audit_enabled: bool = True
+    audit_db_path: str = "data/audit.db"
+    audit_retention_days: int = 365  # 0 keeps everything
+
     # --- HTTP server --------------------------------------------------------
     host: str = "0.0.0.0"
     port: int = 8000

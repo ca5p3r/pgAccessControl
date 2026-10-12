@@ -1,8 +1,12 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, enc } from "./client";
+import { api, enc, qs } from "./client";
 import type {
+  AccessReport,
   ApplyResult,
+  AuditFilters,
+  AuditList,
   AuthState,
+  ObjectItem,
   DatabaseInfo,
   DefaultPrivilege,
   DependencyReport,
@@ -150,6 +154,35 @@ export const useDefaultPrivileges = (role: string, database: string | undefined)
     queryFn: () => api.get<DefaultPrivilege[]>(`/permissions/${enc(role)}/default-privileges`, { database }),
     enabled: !!database,
   });
+
+export const useAudit = (filters: AuditFilters, page: number, size: number, live = false) =>
+  useQuery({
+    queryKey: ["audit", filters, page, size],
+    queryFn: ({ signal }) => api.get<AuditList>("/audit", { ...filters, limit: size, offset: page * size }, signal),
+    placeholderData: keepPreviousData,
+    refetchInterval: live ? 5_000 : false,
+  });
+
+export const useAuditFacets = () =>
+  useQuery({ queryKey: ["audit-facets"], queryFn: () => api.get<{ actors: string[]; databases: string[] }>("/audit/facets"), staleTime: 30_000 });
+
+export const useObjects = (params: { database?: string; type: ObjType; schema?: string; q?: string }, enabled = true) =>
+  useQuery({
+    queryKey: ["objects", params],
+    queryFn: ({ signal }) => api.get<{ items: ObjectItem[]; total: number }>("/objects", { ...params, limit: 30 }, signal),
+    placeholderData: keepPreviousData,
+    enabled: enabled && !!params.database,
+  });
+
+export const useAccessReport = (database: string | undefined, type: ObjType, oid: number | undefined) =>
+  useQuery({
+    queryKey: ["access-report", database, type, oid],
+    queryFn: () => api.get<AccessReport>("/access-report", { database, type, oid }),
+    enabled: !!database && oid !== undefined,
+  });
+
+/** URL for a file download served by the API (same-origin, so the session cookie is sent). */
+export const downloadUrl = (path: string, params: Record<string, string | number | boolean | null | undefined>) => `/api${path}${qs(params)}`;
 
 export function useApplyPermissions(role: string) {
   const qc = useQueryClient();

@@ -73,6 +73,7 @@ export interface Meta {
   host: string;
   port: number;
   database: string;
+  audit_enabled: boolean;
   privileges: Record<ObjType, string[]>;
 }
 
@@ -140,6 +141,65 @@ export interface PermissionChange {
 export interface ApplyResult {
   statements: string[];
   applied: boolean;
+}
+
+export interface AuditEntry {
+  id: number;
+  ts: string;
+  actor: string;
+  ip: string | null;
+  action: string;
+  target_type: string | null;
+  target: string | null;
+  database: string | null;
+  status: "success" | "failed";
+  summary: string;
+  statements: string[];
+  details: Record<string, unknown>;
+  error: string | null;
+}
+
+export interface AuditList {
+  items: AuditEntry[];
+  total: number;
+  enabled: boolean;
+  retention_days: number;
+}
+
+export interface AuditFilters {
+  actor?: string;
+  action?: string;
+  target?: string;
+  database?: string;
+  status?: string;
+  q?: string;
+  date_from?: string;
+  date_to?: string;
+}
+
+export interface ObjectItem {
+  oid: number;
+  schema: string;
+  name: string;
+  kind: string;
+  owner: string;
+  args: string;
+}
+
+export interface AccessPrincipal {
+  name: string;
+  kind: "user" | "role";
+  superuser: boolean;
+  is_owner: boolean;
+  privileges: Record<string, string[]>;
+}
+
+export interface AccessReport {
+  object: ObjectItem & { type: ObjType };
+  privilege_names: string[];
+  grants: { grantee: string; privilege: string; grantable: boolean; grantor: string }[];
+  principals: AccessPrincipal[];
+  truncated: boolean;
 }
 
 export interface AuthState {

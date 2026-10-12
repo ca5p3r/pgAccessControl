@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Check, Copy, Database, FolderTree, Func, Hash, Layers, Minus, Plus, Table2, Undo2, X, Zap } from "./icons";
+import { useNavigate } from "react-router-dom";
+import { Check, Copy, Database, Download, FolderTree, Func, Hash, Layers, Minus, Plus, Table2, Undo2, X, Zap } from "./icons";
 import { useApplyPermissions, useDatabases, useDefaultPrivileges, useMeta, usePermObjects, useSchemas } from "../api/hooks";
 import type { ChangeObjectType, ObjType, PermObject, PermissionChange } from "../api/types";
 import { Badge, Button, Empty, ErrorNote, IconButton, Modal, Notice, Pagination, SearchInput, Spinner, Tabs, Switch, cx, useDebounced, useToast } from "./ui";
@@ -77,6 +78,7 @@ export function PermissionEditor({ role }: { role: string }) {
   const meta = useMeta();
   const dbs = useDatabases();
   const toast = useToast();
+  const nav = useNavigate();
   const [database, setDatabase] = useState<string>();
   const [tab, setTab] = useState<TabId>("table");
   const [schema, setSchema] = useState("");
@@ -159,6 +161,7 @@ export function PermissionEditor({ role }: { role: string }) {
           </select>
         </div>
         <Tabs tabs={TAB_META} value={tab} onChange={setTab} />
+        <Button size="sm" variant="ghost" icon={<Download size={14} />} onClick={() => nav(`/reports?tab=export&role=${encodeURIComponent(role)}`)} title="Export this principal's permissions as SQL, CSV or JSON">Export</Button>
       </div>
 
       {perms.data?.role_superuser && (
@@ -222,7 +225,7 @@ export function PermissionEditor({ role }: { role: string }) {
                             {o.args !== "" && <span className="muted mono">({o.args})</span>}
                             {["view", "matview", "foreign", "partitioned", "procedure"].includes(o.kind) && <Badge>{o.kind === "matview" ? "mat. view" : o.kind}</Badge>}
                           </div>
-                          <div className="obj-sub">owner {o.owner}</div>
+                          <div className="obj-sub">owner {o.owner} · <button className="link-btn" onClick={() => nav(`/reports?tab=access&db=${encodeURIComponent(database ?? "")}&type=${tab}&oid=${o.oid}`)} title="See every user and role that can access this object">who has access?</button></div>
                         </td>
                         {privs.map((p) => {
                           const st = cellState(o, p, e);

@@ -3,6 +3,7 @@ export {
   Check,
   Copy,
   Database,
+  Download,
   FolderTree,
   Hash,
   Layers,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -9,10 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from .audit import AuditStore
 from .config import get_settings
 from .db import PoolManager
 from .errors import install_error_handlers
-from .routers import auth, meta, permissions, roles
+from .routers import audit, auth, meta, permissions, reports, roles
 from .security import require_auth
 
 log = logging.getLogger("pgac")
@@ -25,12 +27,21 @@ def create_app() -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         app.state.pools = PoolManager(settings)
+        purge_task = None
+        try:
+            app.state.audit.init()
+            purge_task = asyncio.create_task(app.state.audit.purge_loop())
+        except Exception as exc:  # e.g. unwritable path: keep the app usable, entries still go to the log
+            log.error("Audit history disabled, cannot use %s: %s", settings.audit_db_path, exc)
+            app.state.audit.enabled = False
         try:
             await app.state.pools.warm_up()
             log.info("Connected to PostgreSQL at %s:%s", settings.pg_host, settings.pg_port)
         except Exception as exc:  # the API keeps running and reports 503s until the server is reachable
             log.warning("PostgreSQL is not reachable yet: %s", exc)
         yield
+        if purge_task:
+            purge_task.cancel()
         await app.state.pools.close()
 
     app = FastAPI(
@@ -41,6 +52,7 @@ def create_app() -> FastAPI:
         redoc_url=None,
         openapi_url="/api/openapi.json",
     )
+    app.state.audit = AuditStore(settings)
     install_error_handlers(app)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     if settings.cors_origin_list:
@@ -64,6 +76,8 @@ def create_app() -> FastAPI:
     api.include_router(meta.router, dependencies=protected)
     api.include_router(roles.router, dependencies=protected)
     api.include_router(permissions.router, dependencies=protected)
+    api.include_router(reports.router, dependencies=protected)
+    api.include_router(audit.router, dependencies=protected)
 
     @api.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
     async def api_not_found(rest: str) -> JSONResponse:

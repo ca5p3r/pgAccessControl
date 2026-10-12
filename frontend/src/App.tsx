@@ -5,9 +5,11 @@ import { UNAUTHORIZED_EVENT } from "./api/client";
 import { useAuth } from "./api/hooks";
 import { Layout } from "./components/Layout";
 import { ErrorNote, Spinner } from "./components/ui";
+import { ActivityPage } from "./pages/ActivityPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { PermissionsPage } from "./pages/PermissionsPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { RoleDetail } from "./pages/RoleDetail";
 import { RolesPage } from "./pages/RolesPage";
 
@@ -36,6 +38,8 @@ export default function App() {
         <Route path="roles/:name" element={<RoleDetail />} />
         <Route path="permissions" element={<PermissionsPage />} />
         <Route path="permissions/:name" element={<PermissionsPage />} />
+        <Route path="reports" element={<ReportsPage />} />
+        <Route path="activity" element={<ActivityPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users } from "lucide-react";
+import { ClipboardList, History, KeyRound, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users } from "lucide-react";
 import { api } from "../api/client";
 import { useAuth, useMeta } from "../api/hooks";
 import { cx } from "./ui";
@@ -11,6 +11,8 @@ const NAV = [
   { to: "/users", label: "Users", icon: UserRound },
   { to: "/roles", label: "Roles", icon: Users },
   { to: "/permissions", label: "Permissions", icon: KeyRound },
+  { to: "/reports", label: "Reports", icon: ClipboardList },
+  { to: "/activity", label: "Activity", icon: History },
 ];
 
 function useTheme() {
