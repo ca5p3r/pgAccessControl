@@ -1,0 +1,66 @@
+# pgAccessControl
+#
+#   docker compose up -d --build                  # app only; point PG_HOST at your PostgreSQL server
+#   docker compose --profile demo up -d --build   # app + a throw-away PostgreSQL for trying it out
+#
+# All settings come from environment variables; copy .env.example to .env and edit it.
+
+services:
+  app:
+    build: .
+    image: pgaccesscontrol:latest
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    environment:
+      # --- PostgreSQL server to administer (use a superuser, or a role with CREATEROLE) ---
+      PG_HOST: ${PG_HOST:-db}
+      PG_PORT: ${PG_PORT:-5432}
+      PG_USER: ${PG_USER:-postgres}
+      PG_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD in .env}
+      PG_DATABASE: ${PG_DATABASE:-postgres}
+      PG_SSLMODE: ${PG_SSLMODE:-prefer}
+      # --- Pooling ---
+      POOL_MIN_SIZE: ${POOL_MIN_SIZE:-1}
+      POOL_MAX_SIZE: ${POOL_MAX_SIZE:-5}
+      POOL_MAX_DATABASES: ${POOL_MAX_DATABASES:-8}
+      # --- Login for this web app ---
+      AUTH_ENABLED: ${AUTH_ENABLED:-true}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env (e.g. openssl rand -hex 32)}
+      SESSION_TTL_MINUTES: ${SESSION_TTL_MINUTES:-480}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # --- Server ---
+      WORKERS: ${WORKERS:-1}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    extra_hosts:
+      # Lets PG_HOST=host.docker.internal reach a PostgreSQL running on the Docker host (Linux too).
+      - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+  # Optional demo database. Not started unless you pass --profile demo.
+  db:
+    profiles: ["demo"]
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD in .env}
+      POSTGRES_DB: ${PG_DATABASE:-postgres}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
