@@ -275,17 +275,9 @@ def _error_text(exc: BaseException) -> str:
 
 
 @asynccontextmanager
-async def audited(
-    request: Request,
-    actor: str,
-    action: str,
-    *,
-    target: str | None,
-    target_type: str = "role",
-    database: str | None = None,
+async def _audit_ctx(
+    store: AuditStore, *, actor: str, ip: str | None, action: str, target: str | None, target_type: str, database: str | None
 ) -> AsyncIterator[AuditEntry]:
-    """Record the outcome of the wrapped operation. Set ``entry.summary`` / ``entry.details`` inside."""
-    store: AuditStore = request.app.state.audit
     entry = AuditEntry(database=database)
     token = _statements.set(entry.statements)
     status, error = "success", None
@@ -300,10 +292,38 @@ async def audited(
         if status == "failed":
             summary = f"Failed: {summary}"
         await store.record(
-            actor=actor, ip=_client(request), action=action, target_type=target_type, target=target,
+            actor=actor, ip=ip, action=action, target_type=target_type, target=target,
             database=entry.database, status=status, summary=summary, statements=entry.statements,
             details=entry.details, error=error,
         )
+
+
+@asynccontextmanager
+async def audited(
+    request: Request,
+    actor: str,
+    action: str,
+    *,
+    target: str | None,
+    target_type: str = "role",
+    database: str | None = None,
+) -> AsyncIterator[AuditEntry]:
+    """Record the outcome of the wrapped operation. Set ``entry.summary`` / ``entry.details`` inside."""
+    async with _audit_ctx(
+        request.app.state.audit, actor=actor, ip=_client(request), action=action, target=target,
+        target_type=target_type, database=database,
+    ) as entry:
+        yield entry
+
+
+@asynccontextmanager
+async def audited_system(
+    store: AuditStore, action: str, *, target: str | None, target_type: str = "role", database: str | None = None,
+    actor: str = "scheduler",
+) -> AsyncIterator[AuditEntry]:
+    """Same as ``audited`` for background jobs that have no request."""
+    async with _audit_ctx(store, actor=actor, ip=None, action=action, target=target, target_type=target_type, database=database) as entry:
+        yield entry
 
 
 async def log_event(request: Request, actor: str, action: str, summary: str, status: str = "success") -> None:

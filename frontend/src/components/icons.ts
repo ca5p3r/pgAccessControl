@@ -1,6 +1,8 @@
 // Single import point for icons so components stay tidy.
 export {
   Check,
+  Columns3 as Columns,
+  KeyRound as Key,
   Copy,
   Database,
   Download,

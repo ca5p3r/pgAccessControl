@@ -29,6 +29,7 @@ os.environ.update(
     AUTH_ENABLED="false",
     LOG_LEVEL="warning",
     AUDIT_DB_PATH=os.path.join(tempfile.mkdtemp(prefix="pgac-audit-"), "audit.db"),
+    DATA_DB_PATH=os.path.join(tempfile.mkdtemp(prefix="pgac-data-"), "app.db"),
 )
 
 from fastapi.testclient import TestClient  # noqa: E402

@@ -29,6 +29,7 @@ async def meta(request: Request, pools: PoolManager = Depends(get_pools)) -> dic
         "port": pools.settings.pg_port,
         "database": pools.settings.pg_database,
         "audit_enabled": request.app.state.audit.enabled,
+        "membership_options": version_num >= 160000,
         "privileges": privilege_catalog(version_num),
     }
 

@@ -22,6 +22,16 @@ export interface RoleSummary {
 export interface Membership {
   role: string;
   admin_option: boolean;
+  inherit_option: boolean | null; // null on servers older than PostgreSQL 16
+  set_option: boolean | null;
+}
+
+/** One membership to save; options left null keep their current value or the server default. */
+export interface MembershipSpec {
+  role: string;
+  admin_option?: boolean | null;
+  inherit_option?: boolean | null;
+  set_option?: boolean | null;
 }
 
 export interface RoleDetail extends RoleSummary {
@@ -74,6 +84,7 @@ export interface Meta {
   port: number;
   database: string;
   audit_enabled: boolean;
+  membership_options: boolean;
   privileges: Record<ObjType, string[]>;
 }
 
@@ -125,7 +136,16 @@ export type ChangeObjectType =
   | "default_tables"
   | "default_sequences"
   | "default_functions"
-  | "default_schemas";
+  | "default_schemas"
+  | "column";
+
+export interface ColumnPrivileges {
+  table: { schema: string; name: string; oid: number };
+  privileges: string[];
+  table_level: Record<string, string[]>;
+  columns: { name: string; type: string; direct: string[]; grantable: string[]; inherited: Record<string, string[]> }[];
+  role_superuser: boolean;
+}
 
 export interface PermissionChange {
   action: "grant" | "revoke";
@@ -136,11 +156,15 @@ export interface PermissionChange {
   oid?: number | null;
   with_grant_option?: boolean;
   for_role?: string | null;
+  columns?: string[] | null;
+  revoke_grant_option?: boolean;
+  cascade?: boolean;
 }
 
 export interface ApplyResult {
   statements: string[];
   applied: boolean;
+  temporary?: TemporaryPlan | null;
 }
 
 export interface AuditEntry {
@@ -203,7 +227,74 @@ export interface AccessReport {
 }
 
 export interface AuthState {
+  role?: "viewer" | "operator" | "admin";
+  oidc_enabled?: boolean;
+  oidc_label?: string;
+  local_login?: boolean;
+  source?: string;
   auth_enabled: boolean;
   authenticated: boolean;
   username: string | null;
+}
+
+export interface AppUser {
+  id: number;
+  username: string;
+  role: "viewer" | "operator" | "admin";
+  disabled: boolean;
+  created_at: string;
+  created_by: string | null;
+  last_login: string | null;
+}
+
+export interface TemporaryItem {
+  id: number;
+  kind: "grant" | "membership";
+  grantee: string;
+  database: string | null;
+  description: string;
+  created_at: string;
+  created_by: string;
+  expires_at: string;
+  status: "pending" | "running" | "expired" | "cancelled" | "failed";
+  finished_at: string | null;
+  error: string | null;
+  spec: { role?: string; changes?: unknown[] };
+}
+
+export interface TemporaryPlan {
+  expires_at: string;
+  expiring: string[];
+  skipped: string[];
+  schedule_id?: number | null;
+}
+
+export interface Snapshot {
+  id: number;
+  name: string;
+  note: string | null;
+  database: string;
+  created_at: string;
+  created_by: string;
+  baseline: boolean;
+  counts: { roles: number; memberships: number; privileges: number; defaults: number };
+  last_check: { at: string; total: number; digest: string } | null;
+}
+
+export interface DriftSection<T> {
+  added: T[];
+  removed: T[];
+  changed: { item: T; changes: Record<string, [unknown, unknown]> }[];
+}
+
+export interface DriftReport {
+  snapshot: Snapshot;
+  compared_with: { kind: "live" | "snapshot"; name: string; at: string; id?: number };
+  total: number;
+  truncated: boolean;
+  summary: Record<"roles" | "memberships" | "privileges" | "defaults", { added: number; removed: number; changed: number }>;
+  roles: DriftSection<{ name: string; login: boolean; superuser: boolean }>;
+  memberships: DriftSection<{ role: string; member: string; admin_option: boolean }>;
+  privileges: DriftSection<{ object_type: string; schema: string; name: string; args: string; col: string; grantee: string; privilege: string; grantable: boolean }>;
+  defaults: DriftSection<{ for_role: string; schema: string | null; object_type: string; grantee: string; privilege: string; grantable: boolean }>;
 }

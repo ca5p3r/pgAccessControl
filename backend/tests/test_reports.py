@@ -124,8 +124,8 @@ def test_csv_and_json_exports(client):
     grant(client, "t_csv", object_type="table", schema="app", name="customers")
     r = client.get("/api/export", params={"database": DB, "role": "t_csv", "format": "csv", "dataset": "privileges"})
     rows = list(csv.reader(io.StringIO(r.text)))
-    assert rows[0] == ["object_type", "schema", "object", "arguments", "owner", "grantee", "privilege", "grantable", "grantor"]
-    assert ["table", "app", "customers", "", "postgres", "t_csv", "SELECT", "False", "postgres"] in rows
+    assert rows[0] == ["object_type", "schema", "object", "arguments", "column", "owner", "grantee", "privilege", "grantable", "grantor"]
+    assert ["table", "app", "customers", "", "", "postgres", "t_csv", "SELECT", "False", "postgres"] in rows
     roles = list(csv.reader(io.StringIO(client.get("/api/export", params={"role": "t_csv", "format": "csv", "dataset": "roles"}).text)))
     assert roles[1][0] == "t_csv" and roles[1][-1] == "'=1+1"  # formula neutralised
 

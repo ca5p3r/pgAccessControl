@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowDown, ArrowUp, ChevronsUpDown, KeyRound, Pencil, Plus, Trash2, UserRound, Users, X } from "lucide-react";
-import { useCreateRole, useRoles, type RoleAttr, type RoleSort } from "../api/hooks";
+import { useCan, useCreateRole, useRoles, type RoleAttr, type RoleSort } from "../api/hooks";
 import type { RoleSummary } from "../api/types";
 import { Avatar, Badge, Button, Drawer, Empty, ErrorNote, IconButton, Pagination, SearchInput, Spinner, Switch, cx, useDebounced, useToast } from "../components/ui";
 import { DeleteRoleDialog, RoleBadges, RoleForm } from "../components/roles";
@@ -48,6 +48,7 @@ export function RolesPage({ kind }: { kind: "user" | "role" }) {
   const nav = useNavigate();
   const toast = useToast();
   const create = useCreateRole();
+  const { can } = useCan();
   const searchRef = useRef<HTMLInputElement>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<string | null>(null);
@@ -92,11 +93,11 @@ export function RolesPage({ kind }: { kind: "user" | "role" }) {
       const el = e.target as HTMLElement;
       if (e.metaKey || e.ctrlKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName) || el.isContentEditable) return;
       if (e.key === "/") { e.preventDefault(); searchRef.current?.focus(); }
-      if (e.key === "n" && !creating && !deleting) { e.preventDefault(); setCreating(true); }
+      if (e.key === "n" && can("operator") && !creating && !deleting) { e.preventDefault(); setCreating(true); }
     };
     window.addEventListener("keydown", h);
     return () => window.removeEventListener("keydown", h);
-  }, [creating, deleting]);
+  }, [creating, deleting, can]);
 
   const filtered = !!(q || attr !== "all" || system);
   const clearFilters = () => { setQInput(""); update({ q: null, attr: null, system: null }); };
@@ -113,7 +114,7 @@ export function RolesPage({ kind }: { kind: "user" | "role" }) {
               : "Reusable permission sets (group roles). Grant privileges to a role, then assign it to users."}
           </p>
         </div>
-        <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)} title="Shortcut: n">New {noun}</Button>
+        {can("operator") && <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreating(true)} title="Shortcut: n">New {noun}</Button>}
       </div>
 
       <div className="toolbar">
@@ -136,7 +137,7 @@ export function RolesPage({ kind }: { kind: "user" | "role" }) {
         <Spinner label={`Loading ${base}…`} />
       ) : data!.items.length === 0 ? (
         <Empty icon={kind === "user" ? <UserRound size={30} /> : <Users size={30} />} title={filtered ? "No matches" : `No ${base} yet`}>
-          {filtered ? <Button onClick={clearFilters}>Clear filters</Button> : <Button variant="primary" onClick={() => setCreating(true)}>Create the first {noun}</Button>}
+          {filtered ? <Button onClick={clearFilters}>Clear filters</Button> : can("operator") ? <Button variant="primary" onClick={() => setCreating(true)}>Create the first {noun}</Button> : "Nothing to show."}
         </Empty>
       ) : (
         <div className={cx("card flush", isFetching && "fetching")}>
@@ -177,8 +178,8 @@ export function RolesPage({ kind }: { kind: "user" | "role" }) {
                     {kind === "user" && <td><span className={cx("expiry", ex.tone)} title={r.valid_until ?? "No expiry set"}>{ex.text}</span></td>}
                     <td className="actions" onClick={(e) => e.stopPropagation()}>
                       <IconButton label="Permissions" onClick={() => open(r, "permissions")}><KeyRound size={16} /></IconButton>
-                      {!r.is_system && <IconButton label="Edit" onClick={() => open(r)}><Pencil size={16} /></IconButton>}
-                      {!r.is_system && <IconButton label="Delete" className="danger" onClick={() => setDeleting(r.name)}><Trash2 size={16} /></IconButton>}
+                      {!r.is_system && can("operator") && <IconButton label="Edit" onClick={() => open(r)}><Pencil size={16} /></IconButton>}
+                      {!r.is_system && can("admin") && <IconButton label="Delete" className="danger" onClick={() => setDeleting(r.name)}><Trash2 size={16} /></IconButton>}
                     </td>
                   </tr>
                 );

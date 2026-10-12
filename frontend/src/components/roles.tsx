@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Copy, Dices, Eye, EyeOff, Lock, Shield, Users, X } from "lucide-react";
-import { useDependencies, useDeleteRole, useRoles, useSetMembership } from "../api/hooks";
-import type { RoleDetail, RoleInput, RoleSummary } from "../api/types";
-import { Avatar, Badge, Button, ErrorNote, Field, Modal, Notice, Spinner, Switch, cx, useDebounced, useToast } from "./ui";
+import { Check, Copy, Dices, Eye, EyeOff, Hourglass, Lock, Shield, Users, X } from "lucide-react";
+import { useCan, useDependencies, useDeleteRole, useMeta, useRoles, useSetMembership, useTemporary, useTemporaryMutations } from "../api/hooks";
+import type { Membership, RoleDetail, RoleInput, RoleSummary } from "../api/types";
+import { ExpiryPicker, toLocalInput, until } from "./expiry";
+import { Avatar, Badge, Button, ErrorNote, Field, IconButton, Modal, Notice, Spinner, Switch, cx, useDebounced, useToast } from "./ui";
 
 /* ------------------------------------------------------------ attributes */
 export function RoleBadges({ role, max }: { role: Pick<RoleSummary, "superuser" | "createdb" | "createrole" | "replication" | "bypassrls" | "valid_until" | "login" | "is_system">; max?: number }) {
@@ -124,6 +125,9 @@ export function RoleForm({ mode, kind, initial, saving, onSubmit, onCancel, form
   const [copied, setCopied] = useState(false);
   const [touched, setTouched] = useState(false);
   const toast = useToast();
+  const { can } = useCan();
+  const readOnly = mode === "edit" && !can("operator");
+  const notAdmin = !can("admin");
 
   const nameError = !name.trim() ? "Name is required" : /^pg_/i.test(name) ? 'Names starting with "pg_" are reserved' : new TextEncoder().encode(name).length > 63 ? "Maximum 63 bytes" : null;
 
@@ -165,6 +169,8 @@ export function RoleForm({ mode, kind, initial, saving, onSubmit, onCancel, form
 
   return (
     <form id={formId} onSubmit={submit} className="form" autoComplete="off">
+      {readOnly && <Notice tone="info">You are signed in as a viewer: settings are read-only.</Notice>}
+      <fieldset disabled={readOnly} className="plain-fieldset">
       <Field label={kind === "user" ? "Username" : "Role name"} error={touched ? nameError : null} hint={mode === "edit" ? "Renaming clears MD5 passwords; SCRAM passwords are unaffected." : undefined}>
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} autoFocus={mode === "create"} placeholder={kind === "user" ? "e.g. jane.doe" : "e.g. analytics_readonly"} spellCheck={false} />
       </Field>
@@ -194,10 +200,10 @@ export function RoleForm({ mode, kind, initial, saving, onSubmit, onCancel, form
         <Switch label="Can log in" hint={kind === "role" ? "Turns this role into a user" : "Required to connect to the database"} checked={login} onChange={setLogin} />
         <Switch label="Inherit privileges" hint="Use privileges of roles it belongs to" checked={flags.inherit} onChange={(v) => setFlags({ ...flags, inherit: v })} />
         <Switch label="Create databases" checked={flags.createdb} onChange={(v) => setFlags({ ...flags, createdb: v })} />
-        <Switch label="Create roles" hint="Can create / alter other roles" checked={flags.createrole} onChange={(v) => setFlags({ ...flags, createrole: v })} />
-        <Switch label="Replication" checked={flags.replication} onChange={(v) => setFlags({ ...flags, replication: v })} />
-        <Switch label="Bypass row-level security" checked={flags.bypassrls} onChange={(v) => setFlags({ ...flags, bypassrls: v })} />
-        <Switch label="Superuser" hint="Bypasses ALL permission checks" tone="danger" checked={flags.superuser} onChange={(v) => setFlags({ ...flags, superuser: v })} />
+        <Switch label="Create roles" hint={notAdmin ? "Admins only" : "Can create / alter other roles"} disabled={notAdmin} checked={flags.createrole} onChange={(v) => setFlags({ ...flags, createrole: v })} />
+        <Switch label="Replication" hint={notAdmin ? "Admins only" : undefined} disabled={notAdmin} checked={flags.replication} onChange={(v) => setFlags({ ...flags, replication: v })} />
+        <Switch label="Bypass row-level security" hint={notAdmin ? "Admins only" : undefined} disabled={notAdmin} checked={flags.bypassrls} onChange={(v) => setFlags({ ...flags, bypassrls: v })} />
+        <Switch label="Superuser" hint={notAdmin ? "Admins only" : "Bypasses ALL permission checks"} tone="danger" disabled={notAdmin} checked={flags.superuser} onChange={(v) => setFlags({ ...flags, superuser: v })} />
       </div>
       {flags.superuser && <Notice tone="warn">Superusers ignore every grant and revoke. Only enable this when the role truly needs unrestricted access.</Notice>}
 
@@ -225,13 +231,14 @@ export function RoleForm({ mode, kind, initial, saving, onSubmit, onCancel, form
           )}
         </>
       )}
+      </fieldset>
       {onCancel && (
         <div className="form-actions">
           <Button type="button" variant="ghost" onClick={onCancel}>Cancel</Button>
           <Button type="submit" variant="primary" loading={saving}>{mode === "create" ? `Create ${login ? "user" : "role"}` : "Save changes"}</Button>
         </div>
       )}
-      {!onCancel && mode === "edit" && (
+      {!onCancel && mode === "edit" && !readOnly && (
         <div className="form-actions">
           <Button type="submit" variant="primary" loading={saving}>Save changes</Button>
         </div>
@@ -241,15 +248,56 @@ export function RoleForm({ mode, kind, initial, saving, onSubmit, onCancel, form
 }
 
 /* ------------------------------------------------------- MembershipEditor */
-function MembershipSection({ title, description, icon, name, direction, current, exclude }: { title: string; description: string; icon: JSX.Element; name: string; direction: "member-of" | "members"; current: string[]; exclude: string[] }) {
-  const [value, setValue] = useState(current);
+interface Opts {
+  admin: boolean | null;
+  inherit: boolean | null;
+  set: boolean | null;
+}
+const toOpts = (m: { admin_option: boolean; inherit_option: boolean | null; set_option: boolean | null }): Opts => ({ admin: m.admin_option, inherit: m.inherit_option, set: m.set_option });
+const sameOpts = (a: Opts, b: Opts) => a.admin === b.admin && a.inherit === b.inherit && a.set === b.set;
+
+function OptionBox({ checked, onChange, label, title, disabled }: { checked: boolean; onChange: (v: boolean) => void; label: string; title: string; disabled?: boolean }) {
+  return (
+    <label className={cx("opt-box", disabled && "disabled")} title={title}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function MembershipSection({ title, description, icon, name, direction, current, exclude, modern, defaultInherit, readOnly }: { title: string; description: string; icon: JSX.Element; name: string; direction: "member-of" | "members"; current: Membership[]; exclude: string[]; modern: boolean; defaultInherit: boolean; readOnly?: boolean }) {
+  const original = useMemo(() => Object.fromEntries(current.map((m) => [m.role, toOpts(m)])) as Record<string, Opts>, [current]);
+  const [value, setValue] = useState<Record<string, Opts>>(original);
   const mut = useSetMembership(name, direction);
   const toast = useToast();
-  const key = current.join("\u0000");
-  useEffect(() => setValue(current), [key]); // eslint-disable-line react-hooks/exhaustive-deps
-  const dirty = useMemo(() => value.slice().sort().join("\u0000") !== current.slice().sort().join("\u0000"), [value, current]);
-  const added = value.filter((v) => !current.includes(v));
-  const removed = current.filter((v) => !value.includes(v));
+  const { can } = useCan();
+  const schedules = useTemporary({ status: "pending", involving: name });
+  const tm = useTemporaryMutations();
+  const [expiring, setExpiring] = useState<{ role: string; member: string; current?: string } | null>(null);
+  const [when, setWhen] = useState("");
+  useEffect(() => setValue(original), [original]);
+  // The schedule (if any) for the membership between this role and `other`.
+  const scheduleFor = (other: string) =>
+    schedules.data?.items.find((t) => t.kind === "membership" && (direction === "member-of" ? t.grantee === name && t.spec.role === other : t.grantee === other && t.spec.role === name));
+  const pair = (other: string) => (direction === "member-of" ? { role: other, member: name } : { role: name, member: other });
+
+  const names = Object.keys(value);
+  const added = names.filter((n) => !(n in original));
+  const removed = Object.keys(original).filter((n) => !(n in value));
+  const changed = names.filter((n) => n in original && !sameOpts(value[n], original[n]));
+  const dirty = added.length + removed.length + changed.length > 0;
+
+  const setNames = (list: string[]) =>
+    setValue(Object.fromEntries(list.map((n) => [n, value[n] ?? { admin: null, inherit: null, set: null }])));
+  const patch = (n: string, p: Partial<Opts>) => setValue({ ...value, [n]: { ...value[n], ...p } });
+  const save = () =>
+    mut.mutate(
+      names.map((n) => ({ role: n, admin_option: value[n].admin, inherit_option: value[n].inherit, set_option: value[n].set })),
+      { onSuccess: () => toast.success("Membership updated"), onError: toast.error },
+    );
+
+  const summary = [added.length && `+${added.length} to add`, removed.length && `−${removed.length} to remove`, changed.length && `${changed.length} option${changed.length === 1 ? "" : "s"} changed`].filter(Boolean).join(", ");
+
   return (
     <section className="card">
       <div className="card-head">
@@ -259,29 +307,85 @@ function MembershipSection({ title, description, icon, name, direction, current,
           <p className="muted">{description}</p>
         </div>
       </div>
-      <RolePicker value={value} onChange={setValue} exclude={[name, ...exclude]} placeholder="Add…" />
-      <div className="card-foot">
-        <span className="muted">
-          {dirty ? `${added.length ? `+${added.length} to add` : ""}${added.length && removed.length ? ", " : ""}${removed.length ? `−${removed.length} to remove` : ""}` : `${current.length} assigned`}
-        </span>
-        <div className="row gap">
-          <Button variant="ghost" disabled={!dirty} onClick={() => setValue(current)}>Reset</Button>
-          <Button variant="primary" disabled={!dirty} loading={mut.isPending} onClick={() => mut.mutate(value, { onSuccess: () => toast.success("Membership updated"), onError: toast.error })}>
-            Save
-          </Button>
+      {!readOnly && <RolePicker value={names} onChange={setNames} exclude={[name, ...exclude]} placeholder="Add…" />}
+      {names.length > 0 && (
+        <table className="table member-opts">
+          <thead>
+            <tr>
+              <th>{direction === "member-of" ? "Role" : "Member"}</th>
+              <th title="May pass this membership on to others (WITH ADMIN OPTION)">Admin</th>
+              {modern && <th title="Automatically uses the privileges of the role (INHERIT)">Inherit</th>}
+              {modern && <th title="May switch into the role with SET ROLE (SET)">SET ROLE</th>}
+              <th>Expires</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {names.map((n) => {
+              const o = value[n];
+              const isNew = !(n in original);
+              const sch = scheduleFor(n);
+              const u = sch ? until(sch.expires_at) : null;
+              return (
+                <tr key={n} className={cx(isNew && "row-new", !isNew && !sameOpts(o, original[n]) && "row-pending")}>
+                  <td><span className="mono">{n}</span>{isNew && <Badge tone="success">new</Badge>}</td>
+                  <td><OptionBox label="" title="Admin option" checked={o.admin ?? false} disabled={readOnly} onChange={(v) => patch(n, { admin: v })} /></td>
+                  {modern && <td><OptionBox label="" title="Inherit" checked={o.inherit ?? (direction === "member-of" ? defaultInherit : true)} disabled={readOnly} onChange={(v) => patch(n, { inherit: v })} /></td>}
+                  {modern && <td><OptionBox label="" title="SET ROLE" checked={o.set ?? true} disabled={readOnly} onChange={(v) => patch(n, { set: v })} /></td>}
+                  <td className="expires-cell">
+                    {isNew ? <span className="muted small">save first</span> : sch ? (
+                      <button className={cx("expiry-chip", u!.tone)} disabled={readOnly || !can("operator")} onClick={() => { setExpiring({ ...pair(n), current: sch.expires_at }); setWhen(toLocalInput(new Date(sch.expires_at))); }} title={`Ends ${new Date(sch.expires_at).toLocaleString()}. Click to change.`}><Hourglass size={12} /> {u!.text}</button>
+                    ) : !readOnly && can("operator") ? (
+                      <button className="link-btn small" onClick={() => { setExpiring(pair(n)); setWhen(toLocalInput(new Date(Date.now() + 24 * 3_600_000))); }}>set expiry</button>
+                    ) : <span className="muted">—</span>}
+                  </td>
+                  <td className="right">{!readOnly && <IconButton label={`Remove ${n}`} onClick={() => setNames(names.filter((x) => x !== n))}><X size={14} /></IconButton>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+      {expiring && (
+        <Modal title="Temporary membership" subtitle={`${expiring.member} → ${expiring.role}`} onClose={() => setExpiring(null)}
+          footer={<>
+            {expiring.current && <Button variant="ghost" loading={tm.membership.isPending} onClick={() => tm.membership.mutate({ role: expiring.role, member: expiring.member, expires_at: null }, { onSuccess: () => { toast.success("Membership is permanent again"); setExpiring(null); }, onError: toast.error })}>Remove expiry</Button>}
+            <Button variant="ghost" onClick={() => setExpiring(null)}>Cancel</Button>
+            <Button variant="primary" loading={tm.membership.isPending} disabled={!when} onClick={() => tm.membership.mutate({ role: expiring.role, member: expiring.member, expires_at: new Date(when).toISOString() }, { onSuccess: () => { toast.success("Expiry saved"); setExpiring(null); }, onError: toast.error })}>Save expiry</Button>
+          </>}>
+          <p className="muted">When the time comes, <strong>{expiring.member}</strong> is removed from <strong>{expiring.role}</strong> automatically.</p>
+          <ExpiryPicker value={when} onChange={setWhen} />
+        </Modal>
+      )}
+      {!readOnly && (
+        <div className="card-foot">
+          <span className="muted">{dirty ? summary : `${current.length} assigned`}</span>
+          <div className="row gap">
+            <Button variant="ghost" disabled={!dirty} onClick={() => setValue(original)}>Reset</Button>
+            <Button variant="primary" disabled={!dirty} loading={mut.isPending} onClick={save}>Save</Button>
+          </div>
         </div>
-      </div>
+      )}
     </section>
   );
 }
 
 export function MembershipEditor({ role }: { role: RoleDetail }) {
+  const meta = useMeta();
+  const { can } = useCan();
+  const modern = meta.data?.membership_options ?? false;
   const memberOf = role.memberships.map((m) => m.role);
   const members = role.members.map((m) => m.role);
+  const ro = !can("operator");
   return (
     <div className="stack">
-      <MembershipSection title="Member of" description={`${role.name} receives the privileges of these roles${role.inherit ? "" : " (only via SET ROLE, because it does not inherit)"}.`} icon={<Shield size={18} />} name={role.name} direction="member-of" current={memberOf} exclude={members} />
-      <MembershipSection title="Members" description={`Users and roles that receive the privileges of ${role.name}.`} icon={<Users size={18} />} name={role.name} direction="members" current={members} exclude={memberOf} />
+      {modern && (
+        <Notice tone="info">
+          <strong>Admin</strong> lets the member pass the role on to others; <strong>Inherit</strong> gives the member the role's privileges automatically; <strong>SET ROLE</strong> lets it switch into the role. These are PostgreSQL 16+ options set per membership.
+        </Notice>
+      )}
+      <MembershipSection title="Member of" description={`${role.name} receives the privileges of these roles.`} icon={<Shield size={18} />} name={role.name} direction="member-of" current={role.memberships} exclude={members} modern={modern} defaultInherit={role.inherit} readOnly={ro} />
+      <MembershipSection title="Members" description={`Users and roles that receive the privileges of ${role.name}.`} icon={<Users size={18} />} name={role.name} direction="members" current={role.members} exclude={memberOf} modern={modern} defaultInherit readOnly={ro} />
     </div>
   );
 }

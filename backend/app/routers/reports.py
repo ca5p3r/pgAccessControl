@@ -12,7 +12,7 @@ from ..audit import log_event
 from ..csvutil import to_csv
 from ..db import PoolManager
 from ..deps import get_pools
-from ..security import require_auth
+from ..security import Principal, require_auth
 from ..services import reports as svc
 
 router = APIRouter(tags=["reports"])
@@ -55,7 +55,7 @@ async def export(
     role: str | None = Query(None, description='Limit to one role (or "PUBLIC")'),
     dataset: Literal["privileges", "roles", "memberships", "defaults"] = "privileges",
     pools: PoolManager = Depends(get_pools),
-    actor: str = Depends(require_auth),
+    me: Principal = Depends(require_auth),
 ) -> StreamingResponse:
     """Download permissions as a SQL script, CSV (one dataset) or JSON, for a database or a single role."""
     async with pools.connection(database) as conn:
@@ -73,5 +73,5 @@ async def export(
             header, rows = svc.csv_rows(data, dataset)
             media, name = "text/csv; charset=utf-8", _filename(f"{data['database']}-{scope}-{dataset}", "csv")
             chunks = to_csv(header, rows)
-    await log_event(request, actor, "export.permissions", f"Exported {format.upper()} {scope} from {data['database']}")
+    await log_event(request, me.username, "export.permissions", f"Exported {format.upper()} {scope} from {data['database']}")
     return StreamingResponse(chunks, media_type=media, headers={"Content-Disposition": f'attachment; filename="{name}"'})

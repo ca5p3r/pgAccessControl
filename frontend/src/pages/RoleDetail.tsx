@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ArrowLeft, History, KeyRound, Settings2, Shield, Trash2 } from "lucide-react";
-import { useRole, useUpdateRole } from "../api/hooks";
+import { useCan, useRole, useUpdateRole } from "../api/hooks";
 import type { RoleDetail as RoleDetailT } from "../api/types";
 import { Avatar, Badge, Button, ErrorNote, Notice, Spinner, Tabs, useToast } from "../components/ui";
 import { DeleteRoleDialog, MembershipEditor, RoleBadges, RoleForm } from "../components/roles";
@@ -18,6 +18,7 @@ export function RoleDetail() {
   const [deleting, setDeleting] = useState(false);
   const [activityPage, setActivityPage] = useState(0);
   const nav = useNavigate();
+  const { can } = useCan();
 
   if (isLoading) return <Spinner label="Loading…" />;
   if (error || !role) return (
@@ -41,7 +42,7 @@ export function RoleDetail() {
             {role.comment && <span className="muted">{role.comment}</span>}
           </div>
         </div>
-        {!role.is_system && !role.is_current_user && (
+        {!role.is_system && !role.is_current_user && can("admin") && (
           <Button variant="danger" icon={<Trash2 size={15} />} onClick={() => setDeleting(true)}>Delete</Button>
         )}
       </div>

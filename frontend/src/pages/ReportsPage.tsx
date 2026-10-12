@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Check, Database, Download, FileCode2, FileJson, FileSpreadsheet, FolderTree, Hash, Search, ShieldQuestion, SquareFunction, Table2 } from "lucide-react";
+import { Camera, Check, Database, Download, FileCode2, FileJson, FileSpreadsheet, FolderTree, Hash, Search, ShieldQuestion, SquareFunction, Table2 } from "lucide-react";
 import { downloadUrl, useAccessReport, useDatabases, useMeta, useObjects } from "../api/hooks";
 import type { AccessPrincipal, ObjType, ObjectItem } from "../api/types";
 import { Avatar, Badge, Button, Empty, ErrorNote, Notice, SearchInput, Spinner, Tabs, cx, useDebounced } from "../components/ui";
 import { RolePicker } from "../components/roles";
+import { SnapshotsTab } from "../components/SnapshotsTab";
 
 const DB_KEY = "pgac-database";
 const savedDb = () => { try { return localStorage.getItem(DB_KEY); } catch { return null; } };
@@ -280,18 +281,18 @@ function ExportTab() {
 /* ------------------------------------------------------------------- page */
 export function ReportsPage() {
   const [sp, setSp] = useSearchParams();
-  const tab = sp.get("tab") === "export" ? "export" : "access";
+  const tab = (["export", "snapshots"].includes(sp.get("tab") ?? "") ? sp.get("tab") : "access") as "access" | "export" | "snapshots";
   return (
     <div className="page">
       <div className="page-head">
         <div>
           <h1>Reports</h1>
-          <p className="muted">Review access across the server and export permissions for audits, backups or migration.</p>
+          <p className="muted">Review access across the server, export permissions, and compare snapshots to catch drift.</p>
         </div>
       </div>
-      <Tabs<"access" | "export"> value={tab} onChange={(t) => setSp(t === "access" ? {} : { tab: t }, { replace: true })}
-        tabs={[{ id: "access", label: "Who has access?", icon: <ShieldQuestion size={15} /> }, { id: "export", label: "Export", icon: <Download size={15} /> }]} />
-      <div className="tab-body">{tab === "access" ? <AccessTab /> : <ExportTab />}</div>
+      <Tabs<"access" | "export" | "snapshots"> value={tab} onChange={(t) => setSp(t === "access" ? {} : { tab: t }, { replace: true })}
+        tabs={[{ id: "access", label: "Who has access?", icon: <ShieldQuestion size={15} /> }, { id: "export", label: "Export", icon: <Download size={15} /> }, { id: "snapshots", label: "Snapshots & drift", icon: <Camera size={15} /> }]} />
+      <div className="tab-body">{tab === "access" ? <AccessTab /> : tab === "export" ? <ExportTab /> : <SnapshotsTab />}</div>
     </div>
   );
 }

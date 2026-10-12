@@ -10,6 +10,10 @@ A web console for managing **PostgreSQL roles, users and permissions** — React
 | See what a user or role can **currently** do          | Permissions grid — direct grants and inherited ones, with the source role |
 | Set **default privileges** for future objects         | Permissions → *Default privileges*                       |
 | Manage what **everyone** (PUBLIC) can do              | *Permissions* → PUBLIC                                   |
+| Give access that **ends by itself** (grants and memberships) | *Make this temporary* when applying, or *set expiry* on a membership; manage under **Temporary access** |
+| **Snapshot** permissions and catch **drift** (changes made outside the app) | *Reports* → Snapshots & drift |
+| Let **several people** in with limited rights, or use **SSO** | *Accounts* (admin) and the `OIDC_*` settings |
+| Set **column-level** privileges, **grant option** and **grantor** | *columns* link on a table row; *Grant option* mode; Review → Advanced |
 | See **who changed what**, with the SQL and before/after values | *Activity* page, and a role's **Activity** tab  |
 | Find out **who can access** a table, view, sequence, function, schema or database | *Reports* → Who has access? (also a link on every grid row) |
 | **Export** permissions as SQL, CSV or JSON (whole database or one user/role) | *Reports* → Export, or the Export button on a role's Permissions tab |
@@ -45,6 +49,13 @@ To administer an existing server, set `PG_HOST` (use `host.docker.internal` for 
 | `SECRET_KEY` | random per start | Signs session cookies — **set it** for Docker/multi-worker |
 | `SESSION_TTL_MINUTES` | `480` | Session lifetime |
 | `COOKIE_SECURE` | `false` | Set `true` behind HTTPS |
+| `LOCAL_LOGIN_ENABLED` | `true` | Password sign-in (built-in admin and accounts). `false` = SSO only |
+| `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` | – | Enable single sign-on (OpenID Connect) |
+| `OIDC_ADMIN_GROUPS` / `OIDC_OPERATOR_GROUPS` / `OIDC_VIEWER_GROUPS` | – | Group names (comma separated) that map to each role |
+| `OIDC_DEFAULT_ROLE`, `OIDC_GROUPS_CLAIM`, `OIDC_USERNAME_CLAIM`, `OIDC_REDIRECT_URI`, `OIDC_SCOPES`, `OIDC_BUTTON_LABEL` | see `.env.example` | SSO details |
+| `DATA_DB_PATH` | `data/app.db` (`/data/app.db` in Docker) | Accounts, temporary-access schedules, snapshots |
+| `SCHEDULER_INTERVAL_SECONDS` | `30` | How often temporary access is checked |
+| `DRIFT_CHECK_INTERVAL_MINUTES` | `0` (off) | Scheduled comparison of baseline snapshots with the live server |
 | `AUDIT_ENABLED` | `true` | Store audit history (SQLite) |
 | `AUDIT_DB_PATH` | `data/audit.db` (`/data/audit.db` in Docker) | Where history is stored; Docker mounts the `appdata` volume at `/data` |
 | `AUDIT_RETENTION_DAYS` | `365` | Older entries are deleted daily; `0` keeps everything |
@@ -79,9 +90,49 @@ TEST_PG_HOST=127.0.0.1 TEST_PG_PORT=5432 TEST_PG_USER=postgres TEST_PG_PASSWORD=
 
 Frontend: `npm run build` runs the TypeScript type-check.
 
+## Accounts, roles and single sign-on
+
+Anyone who signs in is a **viewer**, **operator** or **admin**:
+
+| | viewer | operator | admin |
+|---|:-:|:-:|:-:|
+| Look at users, roles, permissions, reports, activity, snapshots | ✔ | ✔ | ✔ |
+| Grant / revoke, change memberships, create and edit everyday roles, temporary access, snapshots | | ✔ | ✔ |
+| Set `SUPERUSER`, `CREATEROLE`, `REPLICATION`, `BYPASSRLS`; modify or hand out privileged roles (superusers, `CREATEROLE`, `pg_execute_server_program`, `pg_read_all_data`, …) | | | ✔ |
+| Delete roles; manage console accounts | | | ✔ |
+
+Operators cannot escalate: they cannot reset the password of a privileged role, add anyone to one, or create one. Roles are checked on every request, so disabling an account or changing its role takes effect immediately.
+
+* The **built-in admin** (`ADMIN_USERNAME` / `ADMIN_PASSWORD`) always works as a break-glass account. Create further accounts under **Accounts** (admin only; passwords are stored as scrypt hashes, 10+ characters).
+* **SSO**: set `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` and register `https://<host>/api/auth/oidc/callback` as the redirect URI at your provider (Keycloak, Entra ID, Okta, Google, Authentik …). The authorization-code flow with PKCE is used; the ID token's signature, issuer, audience, expiry and nonce are verified. Map provider groups to roles with `OIDC_ADMIN_GROUPS`, `OIDC_OPERATOR_GROUPS`, `OIDC_VIEWER_GROUPS` (highest match wins; users matching none are refused unless `OIDC_DEFAULT_ROLE` is set). Set `LOCAL_LOGIN_ENABLED=false` for SSO only.
+* Everything, including sign-ins and who made each change, appears in **Activity** under the real person's name.
+
+## Temporary access
+
+PostgreSQL can only expire passwords, so the app keeps a schedule and a background job revokes access on time.
+
+* **Grants:** in *Review & apply* tick **Make this temporary** and pick a time (presets: 1 hour … 30 days). Works for grants on individual objects (database, schema, table, sequence, function, column), not for bulk or default privileges.
+* **Memberships:** on a role's *Membership* tab click **set expiry** next to a membership.
+* **Safe by design:** only privileges that were *not already held* are scheduled for revocation, so an expiring grant never removes a permanent one (these are listed as "already granted permanently"). A grant option that is added temporarily is the only thing removed at expiry if the privilege itself was already held.
+* **Manage** under *Temporary access*: change the time, **keep** the access permanently, or **end now** (also retries a failed revocation). Expirations are recorded in *Activity* as `access.expired`, performed by `scheduler`.
+* If the app is down at the deadline, access is removed as soon as it starts. The job checks every `SCHEDULER_INTERVAL_SECONDS`; several app instances share the schedule safely.
+
+## Snapshots and drift
+
+*Reports → Snapshots & drift*: **Take snapshot** saves roles, memberships, privileges (including columns) and default privileges of a database; passwords are never part of it. Open a snapshot to **compare it with the live server** (or with another snapshot) and see everything added, removed or changed since, including changes made directly with `psql` that the audit history cannot see. **Remediation SQL** shows what would restore the snapshot; it is only a script, never executed by the app, and it suggests (but never emits) `DROP ROLE` for roles created since.
+
+Mark a snapshot as the **baseline** (the approved state) and set `DRIFT_CHECK_INTERVAL_MINUTES` to compare it automatically. New drift is written once to *Activity* (`drift.detected`) and to the server log for your alerting, and `drift.cleared` when it matches again.
+
+## Fine-grained permissions
+
+* **Column-level privileges** (`SELECT`, `INSERT`, `UPDATE`, `REFERENCES`): the *columns* link on a table row opens a column grid; table-level grants that already cover every column are shown as dotted checks.
+* **Grant option:** switch the grid to *Grant option* mode and click granted cells to add or remove `WITH GRANT OPTION`. Revoking an option someone has passed on needs **cascade** (Review → Advanced).
+* **Grantor:** Review → Advanced → *Grant as* runs the statements under `SET LOCAL ROLE`, so a role that holds the privilege WITH GRANT OPTION is recorded as the grantor (PostgreSQL's own `GRANTED BY` only accepts the current user).
+* **Membership options** (PostgreSQL 16+): per membership **Admin**, **Inherit** and **SET ROLE** toggles on the Membership tab.
+
 ## Activity (audit history)
 
-Every create, update, delete, membership change, permission change, export and sign-in made **through this app** is stored with: who (and from which IP), when, a readable summary, the exact SQL that ran (passwords redacted), before/after values, and the error if it failed. Failed attempts are kept too, including the SQL that was tried. Previews ("Review & apply") change nothing and are not recorded.
+Every create, update, delete, membership change, permission change, temporary-access event, snapshot, account change, export and sign-in made **through this app** is stored with: who (and from which IP), when, a readable summary, the exact SQL that ran (passwords redacted), before/after values, and the error if it failed. Failed attempts are kept too, including the SQL that was tried. Previews ("Review & apply") change nothing and are not recorded.
 
 * **Activity page**: search and filter by type, person, outcome and date range; click a row for details; switch on *Live* to follow changes; download the filtered list as CSV or JSON.
 * **Per role**: the *Activity* tab shows the history of one user or role. The dashboard shows the latest entries.
@@ -102,7 +153,7 @@ Every create, update, delete, membership change, permission change, export and s
 * **Deleting a role** that owns objects requires choosing another role to take ownership. The app runs `REASSIGN OWNED` (never drops objects), then `DROP OWNED` (removes remaining grants) in every database where the role has dependencies, then `DROP ROLE`. Per-database cleanup is not one atomic transaction across databases.
 * **Default privileges** only affect objects created *after* they are set, and only those created by the chosen role (`FOR ROLE`; blank = the app's connection user).
 
-Not covered: column-level privileges, row-level-security policies, large-object and type privileges, foreign data wrappers/servers, and managing `pg_hba.conf`.
+Not covered: row-level-security policies, large-object and type privileges, foreign data wrappers/servers, and managing `pg_hba.conf`.
 
 ## Design notes
 

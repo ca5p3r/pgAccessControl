@@ -2,6 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 import { api, enc, qs } from "./client";
 import type {
   AccessReport,
+  AppUser,
   ApplyResult,
   AuditFilters,
   AuditList,
@@ -10,6 +11,8 @@ import type {
   DatabaseInfo,
   DefaultPrivilege,
   DependencyReport,
+  ColumnPrivileges,
+  MembershipSpec,
   Meta,
   ObjType,
   PermPage,
@@ -17,11 +20,24 @@ import type {
   RoleDetail,
   RoleInput,
   RoleList,
+  DriftReport,
+  Snapshot,
   Stats,
+  TemporaryItem,
 } from "./types";
 
 export const useAuth = () =>
   useQuery({ queryKey: ["auth"], queryFn: () => api.get<AuthState>("/auth/me"), staleTime: Infinity, retry: false });
+
+export type AppRole = "viewer" | "operator" | "admin";
+const RANK: Record<AppRole, number> = { viewer: 1, operator: 2, admin: 3 };
+
+/** What the signed-in app user may do. The server enforces it; this only hides controls that would be refused. */
+export function useCan() {
+  const auth = useAuth();
+  const role: AppRole = auth.data?.role ?? "admin";
+  return { role, can: (min: AppRole) => RANK[role] >= RANK[min] };
+}
 
 export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: () => api.get<Meta>("/meta"), staleTime: 5 * 60_000 });
 
@@ -121,7 +137,7 @@ export function useSetMembership(name: string, direction: "member-of" | "members
   const invalidate = useInvalidateRoles();
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (roles: string[]) => api.put<RoleDetail>(`/roles/${enc(name)}/${direction}`, { roles }),
+    mutationFn: (memberships: MembershipSpec[]) => api.put<RoleDetail>(`/roles/${enc(name)}/${direction}`, { memberships }),
     onSuccess: (r) => {
       qc.setQueryData(["role", name], r);
       invalidate();
@@ -184,13 +200,92 @@ export const useAccessReport = (database: string | undefined, type: ObjType, oid
 /** URL for a file download served by the API (same-origin, so the session cookie is sent). */
 export const downloadUrl = (path: string, params: Record<string, string | number | boolean | null | undefined>) => `/api${path}${qs(params)}`;
 
+export const useColumnPrivileges = (role: string, database: string | undefined, schema: string, table: string) =>
+  useQuery({
+    queryKey: ["perm", role, "columns", database, schema, table],
+    queryFn: () => api.get<ColumnPrivileges>(`/permissions/${enc(role)}/columns`, { database, schema, table }),
+    enabled: !!database,
+    gcTime: 0,
+  });
+
 export function useApplyPermissions(role: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (v: { database: string; changes: PermissionChange[]; dry_run?: boolean }) =>
+    mutationFn: (v: { database: string; changes: PermissionChange[]; dry_run?: boolean; grantor?: string; expires_at?: string }) =>
       api.post<ApplyResult>(`/permissions/${enc(role)}/apply`, v),
     onSuccess: (r) => {
-      if (r.applied) qc.invalidateQueries({ queryKey: ["perm"] });
+      if (r.applied) {
+        qc.invalidateQueries({ queryKey: ["perm"] });
+        qc.invalidateQueries({ queryKey: ["temporary"] });
+      }
     },
   });
 }
+
+/* ------------------------------------------------------------- app accounts */
+export const useAppUsers = (enabled = true) =>
+  useQuery({ queryKey: ["app-users"], queryFn: () => api.get<{ items: AppUser[]; me: string }>("/app-users"), enabled });
+
+export function useAppUserMutations() {
+  const qc = useQueryClient();
+  const done = () => qc.invalidateQueries({ queryKey: ["app-users"] });
+  return {
+    create: useMutation({ mutationFn: (b: { username: string; password: string; role: string }) => api.post<AppUser>("/app-users", b), onSuccess: done }),
+    update: useMutation({
+      mutationFn: ({ username, ...b }: { username: string; role?: string; disabled?: boolean; password?: string }) => api.patch<AppUser>(`/app-users/${enc(username)}`, b),
+      onSuccess: done,
+    }),
+    remove: useMutation({ mutationFn: (username: string) => api.del(`/app-users/${enc(username)}`), onSuccess: done }),
+  };
+}
+
+export const useChangePassword = () =>
+  useMutation({ mutationFn: (b: { current_password: string; new_password: string }) => api.post("/auth/password", b) });
+
+/* --------------------------------------------------------- temporary access */
+export const useTemporary = (params: { status?: "pending" | "history" | "all"; involving?: string } = {}, live = false) =>
+  useQuery({
+    queryKey: ["temporary", params],
+    queryFn: () => api.get<{ items: TemporaryItem[] }>("/temporary", params),
+    refetchInterval: live ? 15_000 : false,
+  });
+
+export function useTemporaryMutations() {
+  const qc = useQueryClient();
+  const done = () => {
+    qc.invalidateQueries({ queryKey: ["temporary"] });
+    qc.invalidateQueries({ queryKey: ["perm"] });
+    qc.invalidateQueries({ queryKey: ["role"] });
+  };
+  return {
+    cancel: useMutation({ mutationFn: (id: number) => api.post<TemporaryItem>(`/temporary/${id}/cancel`), onSuccess: done }),
+    revokeNow: useMutation({ mutationFn: (id: number) => api.post<TemporaryItem>(`/temporary/${id}/revoke-now`), onSuccess: done }),
+    extend: useMutation({ mutationFn: ({ id, expires_at }: { id: number; expires_at: string }) => api.post<TemporaryItem>(`/temporary/${id}/extend`, { expires_at }), onSuccess: done }),
+    membership: useMutation({
+      mutationFn: (b: { role: string; member: string; expires_at: string | null }) => api.put<{ schedule: TemporaryItem | null }>("/temporary/membership", b),
+      onSuccess: done,
+    }),
+  };
+}
+
+/* ------------------------------------------------------- snapshots and drift */
+export const useSnapshots = () =>
+  useQuery({ queryKey: ["snapshots"], queryFn: () => api.get<{ items: Snapshot[]; check_interval_minutes: number }>("/snapshots") });
+
+export function useSnapshotMutations() {
+  const qc = useQueryClient();
+  const done = () => { qc.invalidateQueries({ queryKey: ["snapshots"] }); qc.invalidateQueries({ queryKey: ["drift"] }); };
+  return {
+    create: useMutation({ mutationFn: (b: { name: string; note?: string; database: string; baseline: boolean }) => api.post<Snapshot>("/snapshots", b), onSuccess: done }),
+    remove: useMutation({ mutationFn: (id: number) => api.del(`/snapshots/${id}`), onSuccess: done }),
+    baseline: useMutation({ mutationFn: ({ id, baseline }: { id: number; baseline: boolean }) => api.post<Snapshot>(`/snapshots/${id}/baseline`, { baseline }), onSuccess: done }),
+  };
+}
+
+export const useDrift = (id: number | undefined, against?: number) =>
+  useQuery({
+    queryKey: ["drift", id, against],
+    queryFn: () => api.get<DriftReport>(`/snapshots/${id}/drift`, { against }),
+    enabled: id !== undefined,
+    gcTime: 0,
+  });

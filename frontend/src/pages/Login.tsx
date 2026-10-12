@@ -2,10 +2,13 @@ import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { ShieldCheck } from "lucide-react";
 import { api } from "../api/client";
+import { useAuth } from "../api/hooks";
 import { Button, Field, Notice } from "../components/ui";
 
 export function Login() {
   const qc = useQueryClient();
+  const auth = useAuth();
+  const sso = new URLSearchParams(window.location.search).get("sso_error");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +35,13 @@ export function Login() {
         <h1>pgAccessControl</h1>
         <p className="muted">Sign in to manage PostgreSQL roles and permissions.</p>
         {error && <Notice tone="danger">{error}</Notice>}
+        {sso && !error && <Notice tone="danger">{sso === "no_access" ? "Your account signed in, but it is not in any group that may use this console. Ask an administrator." : sso === "access_denied" ? "Sign-in was cancelled." : "Single sign-on failed. Please try again."}</Notice>}
+        {auth.data?.oidc_enabled && (
+          <a className="btn btn-secondary btn-md block sso-btn" href="/api/auth/oidc/login"><ShieldCheck size={16} /> {auth.data.oidc_label || "Sign in with SSO"}</a>
+        )}
+        {auth.data?.oidc_enabled && auth.data.local_login !== false && <div className="divider"><span>or use a password</span></div>}
+        {auth.data?.local_login !== false && (
+          <>
         <Field label="Username">
           <input className="input" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus autoComplete="username" />
         </Field>
@@ -41,6 +51,8 @@ export function Login() {
         <Button type="submit" variant="primary" loading={busy} disabled={!username || !password} className="block">
           Sign in
         </Button>
+          </>
+        )}
       </form>
     </div>
   );

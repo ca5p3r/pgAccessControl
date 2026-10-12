@@ -31,6 +31,7 @@ USER app
 
 ENV STATIC_DIR=/app/static \
     AUDIT_DB_PATH=/data/audit.db \
+    DATA_DB_PATH=/data/app.db \
     HOST=0.0.0.0 \
     PORT=8000
 

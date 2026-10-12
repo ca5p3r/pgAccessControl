@@ -152,3 +152,131 @@ def test_meta_and_lists(client):
     stats = client.get("/api/stats").json()
     assert stats["databases"] >= 2
     assert client.get("/api/health").json()["database"] == "up"
+
+
+# ---------------------------------------------------------------------------
+# Column-level privileges
+# ---------------------------------------------------------------------------
+def columns(client, role, table="orders"):
+    r = client.get(f"/api/permissions/{role}/columns", params={"database": DB, "schema": "app", "table": table})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_column_privileges_grant_read_revoke(client):
+    create(client, "t_col")
+    change = {"action": "grant", "object_type": "column", "schema": "app", "name": "customers",
+              "columns": ["id", "name"], "privileges": ["SELECT", "update"]}
+    r = apply(client, "t_col", [change])
+    assert r.status_code == 200, r.text
+    assert r.json()["statements"] == [
+        'GRANT SELECT ("id", "name"), UPDATE ("id", "name") ON TABLE "app"."customers" TO "t_col";']
+
+    data = columns(client, "t_col", "customers")
+    by = {c["name"]: c for c in data["columns"]}
+    assert by["name"]["direct"] == ["SELECT", "UPDATE"] and by["id"]["direct"] == ["SELECT", "UPDATE"]
+    assert data["table_level"] == {}  # nothing table-wide
+    with admin(DB) as c:
+        assert c.execute("SELECT has_column_privilege('t_col', 'app.customers', 'name', 'SELECT')").fetchone()[0]
+        assert not c.execute("SELECT has_table_privilege('t_col', 'app.customers', 'SELECT')").fetchone()[0]
+
+    # a table-level grant shows up as covering every column, and inheritance is reported
+    create(client, "t_col_g")
+    create(client, "t_col_u", login=True, member_of=["t_col_g"])
+    apply(client, "t_col_g", [{"action": "grant", "object_type": "column", "schema": "app", "name": "orders",
+                               "columns": ["total"], "privileges": ["SELECT"]}])
+    apply(client, "t_col_g", [{"action": "grant", "object_type": "table", "schema": "app", "name": "orders",
+                               "privileges": ["INSERT"]}])
+    d = columns(client, "t_col_u")
+    assert {c["name"]: c["inherited"] for c in d["columns"]}["total"] == {"SELECT": ["t_col_g"]}
+    assert d["table_level"] == {"INSERT": ["t_col_g"]}
+
+    r = apply(client, "t_col", [{**change, "action": "revoke", "columns": ["name"], "privileges": ["UPDATE"]}])
+    assert r.status_code == 200
+    by = {c["name"]: c for c in columns(client, "t_col", "customers")["columns"]}
+    assert by["name"]["direct"] == ["SELECT"] and by["id"]["direct"] == ["SELECT", "UPDATE"]
+
+
+def test_column_validation_and_export(client):
+    create(client, "t_colx")
+    base = {"action": "grant", "object_type": "column", "schema": "app", "name": "customers"}
+    assert apply(client, "t_colx", [{**base, "privileges": ["SELECT"]}]).status_code == 400  # columns required
+    assert apply(client, "t_colx", [{**base, "columns": ["id"], "privileges": ["DELETE"]}]).status_code == 400
+    assert apply(client, "t_colx", [{**base, "columns": ["nope"], "privileges": ["SELECT"]}]).status_code == 400
+    assert apply(client, "t_colx", [{**base, "columns": ['id"); DROP TABLE app.orders; --'], "privileges": ["SELECT"]}]).status_code == 400
+    with admin(DB) as c:
+        assert c.execute("SELECT to_regclass('app.orders')").fetchone()[0] is not None
+    assert client.get("/api/permissions/t_colx/columns", params={"database": DB, "schema": "app", "table": "zzz"}).status_code == 404
+
+    assert apply(client, "t_colx", [{**base, "columns": ["id", "name"], "privileges": ["SELECT"]}]).status_code == 200
+    script = client.get("/api/export", params={"database": DB, "role": "t_colx", "format": "sql"}).text
+    assert 'GRANT SELECT ("id", "name") ON TABLE "app"."customers" TO "t_colx";' in script
+    rows = client.get("/api/export", params={"database": DB, "role": "t_colx", "format": "json"}).json()["privileges"]
+    assert {r["col"] for r in rows if r["object_type"] == "column"} == {"id", "name"}
+
+
+# ---------------------------------------------------------------------------
+# Grant option, cascade, grantor
+# ---------------------------------------------------------------------------
+def acl_grantors(table="orders"):
+    with admin(DB) as c:
+        return {
+            (g, e)
+            for g, e in c.execute(
+                f"SELECT a.grantor::regrole::text, a.grantee::regrole::text FROM pg_class c, aclexplode(c.relacl) a "
+                f"WHERE c.oid = 'app.{table}'::regclass"
+            ).fetchall()
+        }
+
+
+def test_grant_option_toggle_and_cascade(client):
+    create(client, "t_del")
+    create(client, "t_sub")
+    obj = {"object_type": "table", "schema": "app", "name": "orders", "privileges": ["SELECT"]}
+    # add the grant option to an existing grant
+    assert apply(client, "t_del", [{"action": "grant", **obj}]).status_code == 200
+    assert by_name(objects(client, "t_del", schema="app"))["orders"]["grantable"] == []
+    assert apply(client, "t_del", [{"action": "grant", "with_grant_option": True, **obj}]).status_code == 200
+    assert by_name(objects(client, "t_del", schema="app"))["orders"]["grantable"] == ["SELECT"]
+
+    # t_del delegates to t_sub, recorded with t_del as the grantor (it needs USAGE on the schema to name the table)
+    assert apply(client, "t_del", [{"action": "grant", "object_type": "schema", "name": "app", "privileges": ["USAGE"]}]).status_code == 200
+    r = apply_as(client, "t_sub", [{"action": "grant", **obj}], grantor="t_del")
+    assert r.status_code == 200, r.text
+    assert r.json()["statements"][0] == 'SET LOCAL ROLE "t_del";'
+    assert ("t_del", "t_sub") in acl_grantors()
+
+    # removing the option while dependents exist needs CASCADE, which removes the delegated grant
+    rev = {"action": "revoke", "revoke_grant_option": True, **obj}
+    r = apply(client, "t_del", [rev])
+    assert r.status_code == 409 or r.status_code == 400
+    assert "dependent privileges" in r.json()["detail"]
+    r = apply(client, "t_del", [{**rev, "cascade": True}])
+    assert r.status_code == 200, r.text
+    assert r.json()["statements"] == ['REVOKE GRANT OPTION FOR SELECT ON TABLE "app"."orders" FROM "t_del" CASCADE;']
+    item = by_name(objects(client, "t_del", schema="app"))["orders"]
+    assert item["direct"] == ["SELECT"] and item["grantable"] == []  # still has SELECT, can no longer pass it on
+    assert by_name(objects(client, "t_sub", schema="app"))["orders"]["direct"] == []
+    assert ("t_del", "t_sub") not in acl_grantors()
+
+
+def apply_as(client, role, changes, grantor):
+    return client.post(
+        f"/api/permissions/{role}/apply", json={"database": DB, "changes": changes, "grantor": grantor}
+    )
+
+
+def test_grantor_validation_and_atomicity(client):
+    create(client, "t_gt")
+    ch = [{"action": "grant", "object_type": "table", "schema": "app", "name": "orders", "privileges": ["SELECT"]}]
+    assert apply_as(client, "t_gt", ch, grantor="t_nobody").status_code == 404
+    assert apply_as(client, "t_gt", ch, grantor="PUBLIC").status_code == 400
+    # a grantor without the right to grant: PostgreSQL refuses and nothing is changed
+    create(client, "t_plain")
+    r = apply_as(client, "t_gt", ch, grantor="t_plain")
+    assert r.status_code in (400, 403)
+    assert by_name(objects(client, "t_gt", schema="app"))["orders"]["direct"] == []
+    # the grantor shows up in the audit entry
+    apply_as(client, "t_gt", ch, grantor="postgres")
+    e = client.get("/api/audit", params={"target": "t_gt", "action": "permission.", "status": "success"}).json()["items"][0]
+    assert e["details"]["grantor"] == "postgres" and e["statements"][0] == 'SET LOCAL ROLE "postgres";'

@@ -134,6 +134,45 @@ def test_membership_both_directions(client):
     assert client.put("/api/roles/t_grp1/member-of", json={"roles": ["t_grp1"]}).status_code == 400
 
 
+def test_membership_options(client):
+    create(client, "t_opt_g")
+    create(client, "t_opt_u", login=True)
+
+    def put(specs, direction="member-of", name="t_opt_u"):
+        r = client.put(f"/api/roles/{name}/{direction}", json={"memberships": specs})
+        assert r.status_code == 200, r.text
+        return {m["role"]: m for m in (r.json()["memberships"] if direction == "member-of" else r.json()["members"])}
+
+    m = put([{"role": "t_opt_g"}])["t_opt_g"]
+    assert (m["admin_option"], m["inherit_option"], m["set_option"]) == (False, True, True)  # server defaults
+
+    # each call changes only the options it names
+    m = put([{"role": "t_opt_g", "admin_option": True}])["t_opt_g"]
+    assert (m["admin_option"], m["inherit_option"], m["set_option"]) == (True, True, True)
+    m = put([{"role": "t_opt_g", "inherit_option": False, "set_option": False}])["t_opt_g"]
+    assert (m["admin_option"], m["inherit_option"], m["set_option"]) == (True, False, False)
+    m = put([{"role": "t_opt_g", "admin_option": False}])["t_opt_g"]
+    assert (m["admin_option"], m["inherit_option"], m["set_option"]) == (False, False, False)
+
+    # the effective view honours INHERIT FALSE
+    with admin(DB) as c:
+        assert not c.execute("SELECT pg_has_role('t_opt_u', 't_opt_g', 'USAGE')").fetchone()[0]
+    put([{"role": "t_opt_g", "inherit_option": True}])
+    with admin(DB) as c:
+        assert c.execute("SELECT pg_has_role('t_opt_u', 't_opt_g', 'USAGE')").fetchone()[0]
+
+    # the audit entry names the option change
+    from .conftest import DB as _db  # noqa: F401
+    e = client.get("/api/audit", params={"target": "t_opt_u", "action": "role.membership"}).json()["items"][0]
+    assert "~t_opt_g (options)" in e["summary"]
+
+    # same thing from the group's side, and the plain role list still works
+    m = put([{"role": "t_opt_u", "admin_option": True}], "members", "t_opt_g")["t_opt_u"]
+    assert m["admin_option"] is True
+    assert client.put("/api/roles/t_opt_u/member-of", json={"roles": []}).status_code == 200
+    assert client.get("/api/roles/t_opt_u").json()["memberships"] == []
+
+
 def test_delete_requires_reassign_when_owning_objects(client):
     create(client, "t_owner", login=True)
     create(client, "t_heir")

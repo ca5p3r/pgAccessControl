@@ -1,9 +1,10 @@
 import { Link } from "react-router-dom";
-import { AlertTriangle, ArrowRight, Crown, Database, History, KeyRound, ShieldAlert, UserRound, Users } from "lucide-react";
-import { useAudit, useMeta, useRoles, useStats } from "../api/hooks";
+import { AlertTriangle, ArrowRight, Crown, Database, History, Hourglass, KeyRound, ShieldAlert, UserRound, Users } from "lucide-react";
+import { useAudit, useMeta, useRoles, useStats, useTemporary } from "../api/hooks";
 import { Avatar, ErrorNote, Notice, Spinner } from "../components/ui";
 import { RoleBadges } from "../components/roles";
 import { ActionBadge, timeAgo } from "../components/activity";
+import { until } from "../components/expiry";
 
 function Stat({ icon, label, value, tone, to }: { icon: JSX.Element; label: string; value: number | string; tone: string; to?: string }) {
   const body = (
@@ -23,6 +24,7 @@ export function Dashboard() {
   const meta = useMeta();
   const privileged = useRoles({ kind: "all", limit: 200 });
   const recent = useAudit({}, 0, 6);
+  const expiring = useTemporary({ status: "pending" });
   const risky = (privileged.data?.items ?? []).filter((r) => r.superuser || r.createrole).slice(0, 6);
 
   if (stats.isLoading) return <Spinner label="Connecting to PostgreSQL…" />;
@@ -50,6 +52,25 @@ export function Dashboard() {
 
       {meta.data && !meta.data.can_create_roles && (
         <Notice tone="warn">The connected PostgreSQL account (<strong>{meta.data.connected_as}</strong>) cannot create roles. Use a superuser or a CREATEROLE account to manage users.</Notice>
+      )}
+
+      {(expiring.data?.items.length ?? 0) > 0 && (
+        <section className="card">
+          <div className="card-head">
+            <div className="card-icon"><Hourglass size={18} /></div>
+            <div className="grow"><h3>Temporary access ending soon</h3><p className="muted">{expiring.data!.items.length} scheduled in total.</p></div>
+            <Link to="/temporary" className="link-arrow">Manage <ArrowRight size={15} /></Link>
+          </div>
+          <ul className="list">
+            {expiring.data!.items.slice(0, 4).map((t) => (
+              <li key={t.id} className="list-row static">
+                <Avatar name={t.grantee} size={26} />
+                <span className="grow"><strong>{t.grantee}</strong> <span className="muted">· {t.description}</span></span>
+                <span className={`expiry ${until(t.expires_at).tone}`}>{until(t.expires_at).text}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
 
       {meta.data?.audit_enabled && (

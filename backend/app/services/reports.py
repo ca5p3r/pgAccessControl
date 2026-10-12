@@ -139,37 +139,44 @@ async def access_report(conn: Conn, object_type: str, oid: int) -> dict[str, Any
 # Export
 # ---------------------------------------------------------------------------
 _PRIV_SQL = """
-SELECT object_type, schema, name, args, owner,
+SELECT object_type, schema, name, args, col, owner,
        CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
        privilege_type AS privilege, is_grantable AS grantable, pg_get_userbyid(grantor) AS grantor
   FROM (
-    SELECT 'table' AS object_type, n.nspname AS schema, c.relname AS name, '' AS args,
+    SELECT 'table' AS object_type, n.nspname AS schema, c.relname AS name, '' AS args, '' AS col,
            pg_get_userbyid(c.relowner) AS owner, a.grantee, a.privilege_type, a.is_grantable, a.grantor
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(c.relacl) a
      WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f') AND a.grantee <> c.relowner AND {sys_n}
     UNION ALL
-    SELECT 'sequence', n.nspname, c.relname, '', pg_get_userbyid(c.relowner), a.grantee, a.privilege_type, a.is_grantable, a.grantor
+    SELECT 'column', n.nspname, c.relname, '', att.attname, pg_get_userbyid(c.relowner),
+           a.grantee, a.privilege_type, a.is_grantable, a.grantor
+      FROM pg_attribute att
+      JOIN pg_class c ON c.oid = att.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+      CROSS JOIN LATERAL aclexplode(att.attacl) a
+     WHERE att.attnum > 0 AND NOT att.attisdropped AND a.grantee <> c.relowner AND {sys_n}
+    UNION ALL
+    SELECT 'sequence', n.nspname, c.relname, '', '', pg_get_userbyid(c.relowner), a.grantee, a.privilege_type, a.is_grantable, a.grantor
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
       CROSS JOIN LATERAL aclexplode(c.relacl) a
      WHERE c.relkind = 'S' AND a.grantee <> c.relowner AND {sys_n}
     UNION ALL
-    SELECT 'function', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), pg_get_userbyid(p.proowner),
+    SELECT 'function', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid), '', pg_get_userbyid(p.proowner),
            a.grantee, a.privilege_type, a.is_grantable, a.grantor
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
       CROSS JOIN LATERAL aclexplode(p.proacl) a
      WHERE p.prokind IN ('f', 'p') AND a.grantee <> p.proowner AND {sys_n}
     UNION ALL
-    SELECT 'schema', n.nspname, n.nspname, '', pg_get_userbyid(n.nspowner), a.grantee, a.privilege_type, a.is_grantable, a.grantor
+    SELECT 'schema', n.nspname, n.nspname, '', '', pg_get_userbyid(n.nspowner), a.grantee, a.privilege_type, a.is_grantable, a.grantor
       FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
      WHERE a.grantee <> n.nspowner AND {sys_n}
     UNION ALL
-    SELECT 'database', '', d.datname, '', pg_get_userbyid(d.datdba), a.grantee, a.privilege_type, a.is_grantable, a.grantor
+    SELECT 'database', '', d.datname, '', '', pg_get_userbyid(d.datdba), a.grantee, a.privilege_type, a.is_grantable, a.grantor
       FROM pg_database d CROSS JOIN LATERAL aclexplode(d.datacl) a
      WHERE d.datname = current_database() AND a.grantee <> d.datdba
   ) u
  WHERE (%(grantee)s::oid IS NULL OR u.grantee = %(grantee)s::oid)
- ORDER BY 1, 2, 3, 4, 6, 7
+ ORDER BY 1, 2, 3, 4, 5, 7, 8
 """.format(sys_n=_SYSTEM_SCHEMA.format(col="n.nspname"))
 
 _DEFAULTS_SQL = """
@@ -300,12 +307,20 @@ def render_sql(conn: Conn, data: dict[str, Any]) -> Iterator[str]:
     if data["privileges"]:
         yield f"\n-- Privileges (database {_q(conn, data['database'])})\n"
         grouped: dict[tuple, list[str]] = {}
+        col_grouped: dict[tuple, list[str]] = {}
         for p in data["privileges"]:
-            grouped.setdefault((p["object_type"], p["schema"], p["name"], p["args"], p["grantee"], p["grantable"]), []).append(p["privilege"])
+            if p["object_type"] == "column":
+                col_grouped.setdefault((p["schema"], p["name"], p["privilege"], p["grantee"], p["grantable"]), []).append(p["col"])
+            else:
+                grouped.setdefault((p["object_type"], p["schema"], p["name"], p["args"], p["grantee"], p["grantable"]), []).append(p["privilege"])
         for (otype, schema, name, args, grantee, grantable), privs in grouped.items():
             target = _target(conn, {"object_type": otype, "schema": schema, "name": name, "args": args})
             opt = " WITH GRANT OPTION" if grantable else ""
             yield f"GRANT {', '.join(privs)} ON {target} TO {_grantee(conn, grantee)}{opt};\n"
+        for (schema, name, priv, grantee, grantable), cols in col_grouped.items():
+            opt = " WITH GRANT OPTION" if grantable else ""
+            col_list = ", ".join(_q(conn, c) for c in cols)
+            yield f"GRANT {priv} ({col_list}) ON TABLE {_q(conn, schema)}.{_q(conn, name)} TO {_grantee(conn, grantee)}{opt};\n"
     if data["default_privileges"]:
         yield "\n-- Default privileges\n"
         grouped2: dict[tuple, list[str]] = {}
@@ -324,8 +339,8 @@ def render_sql(conn: Conn, data: dict[str, Any]) -> Iterator[str]:
 
 CSV_DATASETS: dict[str, tuple[list[str], list[str]]] = {
     "privileges": (
-        ["object_type", "schema", "object", "arguments", "owner", "grantee", "privilege", "grantable", "grantor"],
-        ["object_type", "schema", "name", "args", "owner", "grantee", "privilege", "grantable", "grantor"],
+        ["object_type", "schema", "object", "arguments", "column", "owner", "grantee", "privilege", "grantable", "grantor"],
+        ["object_type", "schema", "name", "args", "col", "owner", "grantee", "privilege", "grantable", "grantor"],
     ),
     "roles": (
         ["name", "login", "superuser", "inherit", "createrole", "createdb", "replication", "bypassrls", "connection_limit", "valid_until", "comment"],

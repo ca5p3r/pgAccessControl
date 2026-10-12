@@ -5,6 +5,7 @@ import { UNAUTHORIZED_EVENT } from "./api/client";
 import { useAuth } from "./api/hooks";
 import { Layout } from "./components/Layout";
 import { ErrorNote, Spinner } from "./components/ui";
+import { AccountsPage } from "./pages/AccountsPage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
@@ -12,6 +13,7 @@ import { PermissionsPage } from "./pages/PermissionsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { RoleDetail } from "./pages/RoleDetail";
 import { RolesPage } from "./pages/RolesPage";
+import { TemporaryPage } from "./pages/TemporaryPage";
 
 export default function App() {
   const auth = useAuth();
@@ -40,6 +42,8 @@ export default function App() {
         <Route path="permissions/:name" element={<PermissionsPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="activity" element={<ActivityPage />} />
+        <Route path="temporary" element={<TemporaryPage />} />
+        <Route path="accounts" element={<AccountsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -11,6 +11,10 @@ const CATEGORIES = [
   { value: "role.", label: "Role & user changes" },
   { value: "permission.", label: "Permission changes" },
   { value: "auth.", label: "Sign-ins" },
+  { value: "access.", label: "Temporary access" },
+  { value: "snapshot.", label: "Snapshots" },
+  { value: "drift.", label: "Drift alerts" },
+  { value: "account.", label: "Console accounts" },
   { value: "export.", label: "Exports" },
 ];
 const KEYS = ["q", "actor", "action", "status", "date_from", "date_to", "target"] as const;

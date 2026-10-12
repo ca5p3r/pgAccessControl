@@ -10,11 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from .accounts import Accounts
 from .audit import AuditStore
+from .oidc import OIDCClient
+from .store import AppStore
 from .config import get_settings
 from .db import PoolManager
 from .errors import install_error_handlers
-from .routers import audit, auth, meta, permissions, reports, roles
+from .routers import app_users, audit, auth, meta, permissions, reports, roles, snapshots, temporary
+from .scheduler import scheduler_loop
 from .security import require_auth
 
 log = logging.getLogger("pgac")
@@ -28,18 +32,21 @@ def create_app() -> FastAPI:
     async def lifespan(app: FastAPI):
         app.state.pools = PoolManager(settings)
         purge_task = None
+        app.state.store.init()
         try:
             app.state.audit.init()
             purge_task = asyncio.create_task(app.state.audit.purge_loop())
         except Exception as exc:  # e.g. unwritable path: keep the app usable, entries still go to the log
             log.error("Audit history disabled, cannot use %s: %s", settings.audit_db_path, exc)
             app.state.audit.enabled = False
+        sched_task = asyncio.create_task(scheduler_loop(app, settings.scheduler_interval_seconds))
         try:
             await app.state.pools.warm_up()
             log.info("Connected to PostgreSQL at %s:%s", settings.pg_host, settings.pg_port)
         except Exception as exc:  # the API keeps running and reports 503s until the server is reachable
             log.warning("PostgreSQL is not reachable yet: %s", exc)
         yield
+        sched_task.cancel()
         if purge_task:
             purge_task.cancel()
         await app.state.pools.close()
@@ -53,6 +60,9 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.state.audit = AuditStore(settings)
+    app.state.store = AppStore(settings.data_db_path)
+    app.state.accounts = Accounts(app.state.store, settings.admin_username)
+    app.state.oidc = OIDCClient(settings) if settings.oidc_enabled else None
     install_error_handlers(app)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
     if settings.cors_origin_list:
@@ -78,6 +88,9 @@ def create_app() -> FastAPI:
     api.include_router(permissions.router, dependencies=protected)
     api.include_router(reports.router, dependencies=protected)
     api.include_router(audit.router, dependencies=protected)
+    api.include_router(temporary.router, dependencies=protected)
+    api.include_router(snapshots.router, dependencies=protected)
+    api.include_router(app_users.router)  # admin-only; checks its own dependency
 
     @api.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
     async def api_not_found(rest: str) -> JSONResponse:

@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, History, KeyRound, LayoutDashboard, LogOut, Menu, Moon, ShieldCheck, Sun, UserRound, Users } from "lucide-react";
+import { ClipboardList, History, Hourglass, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Menu, Moon, ShieldCheck, Sun, UserCog, UserRound, Users } from "lucide-react";
 import { api } from "../api/client";
-import { useAuth, useMeta } from "../api/hooks";
-import { cx } from "./ui";
+import type { AuthState } from "../api/types";
+import { useAuth, useCan, useMeta } from "../api/hooks";
+import { ChangePasswordDialog } from "./ChangePassword";
+import { Avatar, cx } from "./ui";
 
 const NAV = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -12,7 +14,9 @@ const NAV = [
   { to: "/roles", label: "Roles", icon: Users },
   { to: "/permissions", label: "Permissions", icon: KeyRound },
   { to: "/reports", label: "Reports", icon: ClipboardList },
+  { to: "/temporary", label: "Temporary access", icon: Hourglass },
   { to: "/activity", label: "Activity", icon: History },
+  { to: "/accounts", label: "Accounts", icon: UserCog, admin: true },
 ];
 
 function useTheme() {
@@ -29,12 +33,23 @@ export function Layout() {
   const [open, setOpen] = useState(false);
   const auth = useAuth();
   const meta = useMeta();
+  const { can } = useCan();
+  const [changingPw, setChangingPw] = useState(false);
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const logout = async () => {
-    await api.post("/auth/logout");
-    qc.clear();
-    qc.invalidateQueries({ queryKey: ["auth"] });
+    try {
+      await api.post("/auth/logout");
+    } catch {
+      /* already signed out, or the server is unreachable: leave the app either way */
+    }
+    // Drop everything cached for this user, but keep the auth entry and mark it signed out so the app
+    // switches to the login screen at once. (qc.clear() would also delete the auth entry, leaving the
+    // mounted UI with stale "signed in" data and nothing to refetch.)
+    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
+    qc.setQueryData<AuthState>(["auth"], (prev) => prev && { ...prev, authenticated: false, username: null, role: undefined, source: undefined });
+    navigate("/", { replace: true });
   };
 
   return (
@@ -48,7 +63,7 @@ export function Layout() {
           </div>
         </div>
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.map(({ to, label, icon: Icon, end }) => (
+          {NAV.filter((n) => !n.admin || can("admin")).map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => cx("nav-item", isActive && "active")}>
               <Icon size={18} />
               {label}
@@ -65,19 +80,27 @@ export function Layout() {
               </div>
             </div>
           )}
+          {auth.data?.auth_enabled && auth.data.username && (
+            <div className="user-card">
+              <Avatar name={auth.data.username} size={30} />
+              <div className="grow"><div className="server-line">{auth.data.username}</div><div className="server-sub">{auth.data.role}{auth.data.source === "oidc" ? " · SSO" : ""}</div></div>
+              {auth.data.source === "local" && <button className="foot-btn icon" onClick={() => setChangingPw(true)} aria-label="Change password" title="Change password"><LockKeyhole size={15} /></button>}
+            </div>
+          )}
           <div className="foot-actions">
             <button className="foot-btn" onClick={toggleTheme} aria-label="Toggle theme" title="Toggle theme">
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
             {auth.data?.auth_enabled && (
               <button className="foot-btn grow" onClick={logout}>
-                <LogOut size={16} /> Sign out{auth.data.username ? ` (${auth.data.username})` : ""}
+                <LogOut size={16} /> Sign out
               </button>
             )}
           </div>
         </div>
       </aside>
       {open && <div className="scrim" onClick={() => setOpen(false)} />}
+      {changingPw && <ChangePasswordDialog onClose={() => setChangingPw(false)} />}
       <div className="main">
         <header className="topbar">
           <button className="icon-btn" onClick={() => setOpen(true)} aria-label="Open menu"><Menu size={20} /></button>

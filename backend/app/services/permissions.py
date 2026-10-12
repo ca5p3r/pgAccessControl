@@ -38,6 +38,7 @@ def privilege_catalog(server_version: int) -> dict[str, list[str]]:
         "table": table,
         "sequence": ["USAGE", "SELECT", "UPDATE"],
         "function": ["EXECUTE"],
+        "column": ["SELECT", "INSERT", "UPDATE", "REFERENCES"],
     }
 
 
@@ -228,6 +229,63 @@ async def list_schemas(conn: Conn, include_system: bool = False) -> list[str]:
     return [r["nspname"] for r in await cur.fetchall()]
 
 
+_COLUMN_RELKINDS = "('r', 'p', 'v', 'm', 'f')"
+
+
+async def list_columns(conn: Conn, role: str, schema: str, table: str) -> dict[str, Any]:
+    """Column-level privileges of one table for a role, next to the table-level ones that already cover all columns."""
+    flags = await get_role_flags(conn, role)
+    grantee = "x.grantee = 0" if flags["is_public"] else "(x.grantee = 0 OR pg_has_role(%(role)s::name, x.grantee, 'USAGE'))"
+    params = {"role": role, "schema": schema, "table": table}
+    cur = await conn.execute(
+        f"""SELECT c.oid, jsonb_agg(DISTINCT jsonb_build_object(
+                       'g', CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END,
+                       'p', x.privilege_type)) FILTER (WHERE x.grantee IS NOT NULL) AS grants
+              FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+              LEFT JOIN LATERAL aclexplode(COALESCE(c.relacl, acldefault('r', c.relowner))) x
+                     ON {grantee} AND x.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'REFERENCES')
+             WHERE n.nspname = %(schema)s AND c.relname = %(table)s AND c.relkind IN {_COLUMN_RELKINDS}
+             GROUP BY c.oid""",
+        params,
+    )
+    tbl = await cur.fetchone()
+    if tbl is None:
+        raise NotFound(f'Table "{schema}"."{table}" does not exist')
+    table_level: dict[str, list[str]] = {}
+    for g in tbl["grants"] or []:
+        table_level.setdefault(g["p"], []).append("direct" if g["g"] == role else g["g"])
+
+    cur = await conn.execute(
+        f"""SELECT a.attnum, a.attname AS name, format_type(a.atttypid, a.atttypmod) AS type,
+                   COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                                'g', CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(x.grantee) END,
+                                'p', x.privilege_type, 'o', x.is_grantable))
+                               FROM aclexplode(a.attacl) x WHERE {grantee}), '[]'::jsonb) AS grants
+              FROM pg_attribute a
+             WHERE a.attrelid = %(oid)s AND a.attnum > 0 AND NOT a.attisdropped
+             ORDER BY a.attnum""",
+        {**params, "oid": tbl["oid"]},
+    )
+    columns = []
+    for r in await cur.fetchall():
+        direct, grantable, inherited = [], [], {}
+        for g in r["grants"]:
+            if g["g"] == role or (flags["is_public"] and g["g"] == PUBLIC):
+                direct.append(g["p"])
+                if g["o"]:
+                    grantable.append(g["p"])
+            else:
+                inherited.setdefault(g["p"], []).append(g["g"])
+        columns.append({"name": r["name"], "type": r["type"], "direct": sorted(direct), "grantable": sorted(grantable), "inherited": inherited})
+    return {
+        "table": {"schema": schema, "name": table, "oid": tbl["oid"]},
+        "privileges": privilege_catalog(conn.info.server_version)["column"],
+        "table_level": table_level,
+        "columns": columns,
+        "role_superuser": flags["superuser"],
+    }
+
+
 _DEFACL_TYPES = {"r": "table", "S": "sequence", "f": "function", "n": "schema", "T": "type"}
 
 
@@ -270,6 +328,7 @@ _PRIV_FAMILY = {
     "table": "table",
     "sequence": "sequence",
     "function": "function",
+    "column": "column",
     "all_tables": "table",
     "all_sequences": "sequence",
     "all_functions": "function",
@@ -288,17 +347,27 @@ _DEFAULT_TARGET = {
 }
 
 
-def _privileges(change: PermissionChange, catalog: dict[str, list[str]]) -> sql.Composable:
+def _priv_names(change: PermissionChange, catalog: dict[str, list[str]]) -> list[str]:
+    """Validated privilege keywords (allowlisted, so safe to embed as SQL)."""
     allowed = catalog[_PRIV_FAMILY[change.object_type]]
     wanted = [p.strip().upper() for p in change.privileges]
     if any(p in ("ALL", "ALL PRIVILEGES") for p in wanted):
-        return sql.SQL("ALL PRIVILEGES")
+        return ["ALL PRIVILEGES"]
     bad = [p for p in wanted if p not in allowed]
     if bad:
         raise AppError(
             f"Invalid privilege(s) {', '.join(bad)} for {change.object_type}. Allowed: {', '.join(allowed)}."
         )
-    return sql.SQL(", ").join(sql.SQL(p) for p in dict.fromkeys(wanted))
+    return list(dict.fromkeys(wanted))
+
+
+def _privileges(change: PermissionChange, catalog: dict[str, list[str]]) -> sql.Composable:
+    names = _priv_names(change, catalog)
+    if change.object_type == "column":
+        _require(change, "columns")
+        cols = sql.SQL(", ").join(sql.Identifier(c) for c in dict.fromkeys(change.columns or []))
+        return sql.SQL(", ").join(sql.SQL("{} ({})").format(sql.SQL(p), cols) for p in names)
+    return sql.SQL(", ").join(sql.SQL(p) for p in names)
 
 
 def _require(change: PermissionChange, *fields: str) -> None:
@@ -315,10 +384,12 @@ async def _target(conn: Conn, change: PermissionChange) -> sql.Composable:
     if t == "schema":
         _require(change, "name")
         return sql.SQL("SCHEMA {}").format(sql.Identifier(change.name))
-    if t in ("table", "sequence"):
+    if t in ("table", "sequence", "column"):
         _require(change, "schema_name", "name")
         return sql.SQL("{} {}.{}").format(
-            sql.SQL(t.upper()), sql.Identifier(change.schema_name), sql.Identifier(change.name)
+            sql.SQL("SEQUENCE" if t == "sequence" else "TABLE"),
+            sql.Identifier(change.schema_name),
+            sql.Identifier(change.name),
         )
     if t == "function":
         _require(change, "oid")
@@ -367,16 +438,26 @@ async def build_statements(conn: Conn, role: str, changes: list[PermissionChange
             if change.with_grant_option:
                 parts.append(sql.SQL("WITH GRANT OPTION"))
         else:
-            parts.append(sql.SQL("REVOKE {} ON {} FROM {}").format(privs, on, grantee))
+            verb = "REVOKE GRANT OPTION FOR" if change.revoke_grant_option else "REVOKE"
+            parts.append(sql.SQL("{} {} ON {} FROM {}").format(sql.SQL(verb), privs, on, grantee))
+            if change.cascade:
+                parts.append(sql.SQL("CASCADE"))
         statements.append(sql.SQL(" ").join(parts))
     return statements
 
 
 async def apply_changes(
-    conn: Conn, role: str, changes: list[PermissionChange], *, dry_run: bool
+    conn: Conn, role: str, changes: list[PermissionChange], *, dry_run: bool, grantor: str | None = None
 ) -> tuple[list[str], bool]:
     await get_role_flags(conn, role)
     statements = await build_statements(conn, role, changes)
+    if grantor:
+        # GRANTED BY only accepts the current user, so to record someone else as the grantor (e.g. a role
+        # holding WITH GRANT OPTION) the statements run under SET LOCAL ROLE, which ends with the transaction.
+        if is_public(grantor):
+            raise AppError("PUBLIC cannot be a grantor.")
+        await get_role_flags(conn, grantor)
+        statements.insert(0, sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(grantor)))
     rendered = [s.as_string(conn).strip() + ";" for s in statements]
     if dry_run:
         return rendered, False

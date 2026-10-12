@@ -24,6 +24,20 @@ const ACTIONS: Record<string, { label: string; tone: "success" | "primary" | "da
   "auth.logout": { label: "Sign-out", tone: "neutral" },
   "auth.login_failed": { label: "Failed sign-in", tone: "warn" },
   "export.permissions": { label: "Export", tone: "neutral" },
+  "access.expired": { label: "Access ended", tone: "success" },
+  "access.revoke_now": { label: "Access ended", tone: "success" },
+  "access.schedule": { label: "Expiry set", tone: "info" },
+  "access.extend": { label: "Expiry changed", tone: "info" },
+  "access.cancel": { label: "Expiry removed", tone: "neutral" },
+  "snapshot.create": { label: "Snapshot", tone: "primary" },
+  "snapshot.delete": { label: "Snapshot", tone: "danger" },
+  "snapshot.baseline": { label: "Baseline", tone: "primary" },
+  "drift.detected": { label: "Drift", tone: "warn" },
+  "drift.cleared": { label: "Drift cleared", tone: "success" },
+  "account.create": { label: "Account", tone: "success" },
+  "account.update": { label: "Account", tone: "primary" },
+  "account.delete": { label: "Account", tone: "danger" },
+  "account.password": { label: "Password", tone: "neutral" },
 };
 
 export const ActionBadge = ({ action }: { action: string }) => {

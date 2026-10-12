@@ -18,6 +18,7 @@ from ..schemas import (
     Dependency,
     DependencyReport,
     Membership,
+    MembershipSpec,
     RoleAttributes,
     RoleCreate,
     RoleDetail,
@@ -169,16 +170,25 @@ async def _fetch_role(conn: Conn, name: str) -> dict[str, Any]:
 
 async def _memberships(conn: Conn, oid: int, *, direction: str) -> list[Membership]:
     # direction "up": roles this role belongs to; "down": members of this role
-    if direction == "up":
-        query = """SELECT g.rolname AS role, bool_or(m.admin_option) AS admin_option
-                     FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid
-                    WHERE m.member = %s GROUP BY g.rolname ORDER BY g.rolname"""
-    else:
-        query = """SELECT g.rolname AS role, bool_or(m.admin_option) AS admin_option
-                     FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.member
-                    WHERE m.roleid = %s GROUP BY g.rolname ORDER BY g.rolname"""
-    cur = await conn.execute(query, (oid,))
+    options = (
+        "bool_or(m.admin_option) AS admin_option, bool_or(m.inherit_option) AS inherit_option, "
+        "bool_or(m.set_option) AS set_option"
+        if has_membership_options(conn)
+        else "bool_or(m.admin_option) AS admin_option"
+    )
+    other, mine = ("roleid", "member") if direction == "up" else ("member", "roleid")
+    cur = await conn.execute(
+        f"""SELECT g.rolname AS role, {options}
+              FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.{other}
+             WHERE m.{mine} = %s GROUP BY g.rolname ORDER BY g.rolname""",
+        (oid,),
+    )
     return [Membership(**r) for r in await cur.fetchall()]
+
+
+def has_membership_options(conn: Conn) -> bool:
+    """PostgreSQL 16 added per-membership INHERIT and SET options."""
+    return conn.info.server_version >= 160000
 
 
 async def get_role(conn: Conn, name: str) -> RoleDetail:
@@ -289,40 +299,77 @@ async def update_role(conn: Conn, name: str, data: RoleUpdate) -> str:
     return final
 
 
-async def _grant_role(conn: Conn, role: str, member: str) -> None:
-    await _exec(conn, sql.SQL("GRANT {} TO {}").format(sql.Identifier(role), sql.Identifier(member)))
-
-
 async def _revoke_role(conn: Conn, role: str, member: str) -> None:
     await _exec(conn, sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(role), sql.Identifier(member)))
 
 
-async def set_member_of(conn: Conn, name: str, roles: list[str]) -> None:
-    """Make ``name`` a member of exactly ``roles`` (grants missing, revokes extra)."""
-    row = await _fetch_role(conn, name)
-    _guard_not_system(name)
-    desired = set(roles)
-    if name in desired:
-        raise AppError("A role cannot be a member of itself.")
-    current = {m.role for m in await _memberships(conn, row["oid"], direction="up")}
-    for role in sorted(desired - current):
-        await _grant_role(conn, role, name)
-    for role in sorted(current - desired):
-        await _revoke_role(conn, role, name)
+def _bool_word(v: bool) -> str:
+    return "TRUE" if v else "FALSE"
 
 
-async def set_members(conn: Conn, name: str, members: list[str]) -> None:
-    """Make ``members`` the complete set of direct members of role ``name``."""
+async def _grant_role(
+    conn: Conn, role: str, member: str, spec: MembershipSpec | None = None, existing: Membership | None = None
+) -> None:
+    """GRANT role TO member, passing only the options that are given (and differ from what exists)."""
+    opts: list[str] = []
+    if spec is not None:
+        modern = has_membership_options(conn)
+        if spec.admin_option is not None and (existing is None or existing.admin_option != spec.admin_option):
+            if modern:
+                opts.append(f"ADMIN {_bool_word(spec.admin_option)}")
+            elif spec.admin_option:
+                opts.append("ADMIN OPTION")  # pre-16 can only add it; removal is a REVOKE (see caller)
+        if modern:
+            if spec.inherit_option is not None and (existing is None or existing.inherit_option != spec.inherit_option):
+                opts.append(f"INHERIT {_bool_word(spec.inherit_option)}")
+            if spec.set_option is not None and (existing is None or existing.set_option != spec.set_option):
+                opts.append(f"SET {_bool_word(spec.set_option)}")
+    if existing is not None and not opts:
+        return  # nothing to change
+    stmt = sql.SQL("GRANT {} TO {}").format(sql.Identifier(role), sql.Identifier(member))
+    if opts:
+        stmt = sql.SQL("{} WITH {}").format(stmt, sql.SQL(", ").join(sql.SQL(o) for o in opts))
+    await _exec(conn, stmt)
+
+
+async def _sync_memberships(conn: Conn, name: str, oid: int, specs: list[MembershipSpec], *, up: bool) -> None:
+    current = {m.role: m for m in await _memberships(conn, oid, direction="up" if up else "down")}
+    desired: dict[str, MembershipSpec] = {}
+    for spec in specs:
+        if spec.role == name:
+            raise AppError("A role cannot be a member of itself.")
+        desired[spec.role] = spec
+
+    def pair(other: str) -> tuple[str, str]:  # (role, member)
+        return (other, name) if up else (name, other)
+
+    for other in sorted(desired.keys() - current.keys()):
+        await _grant_role(conn, *pair(other), spec=desired[other])
+    for other in sorted(desired.keys() & current.keys()):
+        role, member = pair(other)
+        spec, cur = desired[other], current[other]
+        if not has_membership_options(conn) and spec.admin_option is False and cur.admin_option:
+            await _exec(
+                conn, sql.SQL("REVOKE ADMIN OPTION FOR {} FROM {}").format(sql.Identifier(role), sql.Identifier(member))
+            )
+        else:
+            await _grant_role(conn, role, member, spec=spec, existing=cur)
+    for other in sorted(current.keys() - desired.keys()):
+        await _revoke_role(conn, *pair(other))
+
+
+async def set_member_of(conn: Conn, name: str, specs: list[MembershipSpec]) -> None:
+    """Make name a member of exactly these roles (grants missing, updates options, revokes extra)."""
     row = await _fetch_role(conn, name)
     _guard_not_system(name)
-    desired = set(members)
-    if name in desired:
-        raise AppError("A role cannot be a member of itself.")
-    current = {m.role for m in await _memberships(conn, row["oid"], direction="down")}
-    for member in sorted(desired - current):
-        await _grant_role(conn, name, member)
-    for member in sorted(current - desired):
-        await _revoke_role(conn, name, member)
+    await _sync_memberships(conn, name, row["oid"], specs, up=True)
+
+
+async def set_members(conn: Conn, name: str, specs: list[MembershipSpec]) -> None:
+    """Make these the complete set of direct members of role name."""
+    row = await _fetch_role(conn, name)
+    _guard_not_system(name)
+    await _sync_memberships(conn, name, row["oid"], specs, up=False)
 
 
 # ---------------------------------------------------------------------------

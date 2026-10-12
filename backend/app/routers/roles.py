@@ -10,13 +10,15 @@ from ..db import PoolManager
 from ..deps import get_pools
 from ..schemas import (
     DependencyReport,
+    MembershipSpec,
     MembershipUpdate,
     RoleCreate,
     RoleDetail,
     RoleList,
     RoleUpdate,
 )
-from ..security import require_auth
+from ..rbac import ensure_attributes_allowed, ensure_role_editable, ensure_roles_grantable
+from ..security import Principal, require_admin, require_operator
 from ..services import roles as svc
 
 router = APIRouter(prefix="/roles", tags=["roles"])
@@ -88,10 +90,13 @@ async def list_roles(
 
 @router.post("", response_model=RoleDetail, status_code=201)
 async def create_role(
-    body: RoleCreate, request: Request, pools: PoolManager = Depends(get_pools), actor: str = Depends(require_auth)
+    body: RoleCreate, request: Request, pools: PoolManager = Depends(get_pools), me: Principal = Depends(require_operator)
 ) -> RoleDetail:
     kind = "user" if body.login else "role"
-    async with audited(request, actor, "role.create", target=body.name) as a:
+    ensure_attributes_allowed(me, body.model_dump())
+    async with pools.connection() as conn:
+        await ensure_roles_grantable(conn, me, body.member_of)
+    async with audited(request, me.username, "role.create", target=body.name) as a:
         a.summary = f"Created {kind} {body.name}"
         a.details = {
             "attributes": body.model_dump(include=set(_TRACKED), exclude_none=True, mode="json"),
@@ -111,37 +116,66 @@ async def role_dependencies(name: str, pools: PoolManager = Depends(get_pools)) 
         return await svc.get_dependencies(conn, name)
 
 
+def _opts(m: Any) -> dict[str, Any]:
+    return {"admin": m.admin_option, "inherit": m.inherit_option, "set": m.set_option}
+
+
 async def _membership(
-    request: Request, pools: PoolManager, actor: str, name: str, roles: list[str], direction: str
+    request: Request, pools: PoolManager, me: Principal, name: str, specs: list[MembershipSpec], direction: str
 ) -> RoleDetail:
     up = direction == "member-of"
+    actor = me.username
     async with audited(request, actor, "role.membership", target=name) as a:
         before = await _safe_get(pools, name)
-        old = sorted(m.role for m in ((before.memberships if up else before.members) if before else []))
-        new = sorted(set(roles))
+        cur = {m.role: m for m in ((before.memberships if up else before.members) if before else [])}
+        old = sorted(cur)
+        new = sorted({s.role for s in specs})
         added, removed = [r for r in new if r not in old], [r for r in old if r not in new]
+        changed = [
+            s.role
+            for s in specs
+            if s.role in cur
+            and any(
+                getattr(s, f"{k}_option") is not None and getattr(s, f"{k}_option") != getattr(cur[s.role], f"{k}_option")
+                for k in ("admin", "inherit", "set")
+            )
+        ]
         a.summary = f"Changed {'roles of' if up else 'members of'} {name}: " + (
-            ", ".join([f"+{r}" for r in added] + [f"−{r}" for r in removed]) or "no change"
+            ", ".join([f"+{r}" for r in added] + [f"−{r}" for r in removed] + [f"~{r} (options)" for r in changed])
+            or "no change"
         )
-        a.details = {"direction": direction, "before": old, "after": new, "added": added, "removed": removed}
+        a.details = {
+            "direction": direction,
+            "before": old,
+            "after": new,
+            "added": added,
+            "removed": removed,
+            "options_changed": {
+                s.role: {"from": _opts(cur[s.role]), "to": s.model_dump(exclude={"role"}, exclude_none=True)}
+                for s in specs
+                if s.role in changed
+            },
+        }
         async with pools.connection() as conn:
-            await (svc.set_member_of if up else svc.set_members)(conn, name, roles)
+            if added or changed:  # operators may not hand out powerful roles (nor change who holds them)
+                await ensure_roles_grantable(conn, me, added + changed if up else [name])
+            await (svc.set_member_of if up else svc.set_members)(conn, name, specs)
     async with pools.connection() as conn:
         return await svc.get_role(conn, name)
 
 
 @router.put("/{name:path}/member-of", response_model=RoleDetail)
 async def set_member_of(
-    name: str, body: MembershipUpdate, request: Request, pools: PoolManager = Depends(get_pools), actor: str = Depends(require_auth)
+    name: str, body: MembershipUpdate, request: Request, pools: PoolManager = Depends(get_pools), me: Principal = Depends(require_operator)
 ) -> RoleDetail:
-    return await _membership(request, pools, actor, name, body.roles, "member-of")
+    return await _membership(request, pools, me, name, body.specs(), "member-of")
 
 
 @router.put("/{name:path}/members", response_model=RoleDetail)
 async def set_members(
-    name: str, body: MembershipUpdate, request: Request, pools: PoolManager = Depends(get_pools), actor: str = Depends(require_auth)
+    name: str, body: MembershipUpdate, request: Request, pools: PoolManager = Depends(get_pools), me: Principal = Depends(require_operator)
 ) -> RoleDetail:
-    return await _membership(request, pools, actor, name, body.roles, "members")
+    return await _membership(request, pools, me, name, body.specs(), "members")
 
 
 @router.get("/{name:path}", response_model=RoleDetail)
@@ -152,10 +186,13 @@ async def get_role(name: str, pools: PoolManager = Depends(get_pools)) -> RoleDe
 
 @router.patch("/{name:path}", response_model=RoleDetail)
 async def update_role(
-    name: str, body: RoleUpdate, request: Request, pools: PoolManager = Depends(get_pools), actor: str = Depends(require_auth)
+    name: str, body: RoleUpdate, request: Request, pools: PoolManager = Depends(get_pools), me: Principal = Depends(require_operator)
 ) -> RoleDetail:
     final = name
-    async with audited(request, actor, "role.update", target=name) as a:
+    ensure_attributes_allowed(me, body.model_dump(exclude_none=True))
+    async with pools.connection() as conn:
+        await ensure_role_editable(conn, me, name)  # also stops password resets of privileged roles
+    async with audited(request, me.username, "role.update", target=name) as a:
         before = await _safe_get(pools, name)
         a.summary = f"Updated {name}"
         async with pools.connection() as conn:
@@ -183,9 +220,9 @@ async def delete_role(
     request: Request,
     reassign_to: str | None = None,
     pools: PoolManager = Depends(get_pools),
-    actor: str = Depends(require_auth),
+    me: Principal = Depends(require_admin),
 ) -> None:
-    async with audited(request, actor, "role.delete", target=name) as a:
+    async with audited(request, me.username, "role.delete", target=name) as a:
         before = await _safe_get(pools, name)
         kind = before.kind if before else "role"
         a.summary = f"Deleted {kind} {name}" + (f" (ownership transferred to {reassign_to})" if reassign_to else "")

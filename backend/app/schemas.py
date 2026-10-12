@@ -71,13 +71,35 @@ class RoleUpdate(RoleAttributes):
         return v
 
 
+class MembershipSpec(BaseModel):
+    """One membership. Options left as None keep their current value (or the server default for new ones).
+
+    inherit_option and set_option exist only on PostgreSQL 16+; they are ignored on older servers.
+    """
+
+    role: str
+    admin_option: bool | None = None
+    inherit_option: bool | None = None
+    set_option: bool | None = None
+
+
 class MembershipUpdate(BaseModel):
-    roles: list[str]
+    """The complete desired membership list. Send roles (names only) or memberships (with options)."""
+
+    roles: list[str] | None = None
+    memberships: list[MembershipSpec] | None = None
+
+    def specs(self) -> list[MembershipSpec]:
+        if self.memberships is not None:
+            return self.memberships
+        return [MembershipSpec(role=r) for r in (self.roles or [])]
 
 
 class Membership(BaseModel):
     role: str
     admin_option: bool = False
+    inherit_option: bool | None = None  # None on servers older than PostgreSQL 16
+    set_option: bool | None = None
 
 
 class RoleSummary(BaseModel):
@@ -137,6 +159,7 @@ ObjectType = Literal[
     "default_sequences",
     "default_functions",
     "default_schemas",
+    "column",
 ]
 
 
@@ -149,6 +172,9 @@ class PermissionChange(BaseModel):
     oid: int | None = None  # functions are addressed by oid
     with_grant_option: bool = False
     for_role: str | None = None  # default privileges: objects created by this role
+    columns: list[str] | None = None  # object_type "column": the table's columns to (un)grant on
+    revoke_grant_option: bool = False  # revoke only the right to pass the privilege on (REVOKE GRANT OPTION FOR)
+    cascade: bool = False  # revoke: also remove privileges the grantee passed on to others
 
     model_config = {"populate_by_name": True}
 
@@ -157,8 +183,11 @@ class ApplyRequest(BaseModel):
     database: str
     changes: list[PermissionChange] = Field(min_length=1, max_length=1000)
     dry_run: bool = False
+    grantor: str | None = None  # run the statements as this role (SET LOCAL ROLE) so it is recorded as grantor
+    expires_at: datetime | None = None  # make the grants temporary: revoked automatically at this time
 
 
 class ApplyResult(BaseModel):
     statements: list[str]
     applied: bool
+    temporary: dict | None = None  # {expires_at, expiring: [...], skipped: [...], schedule_id}
