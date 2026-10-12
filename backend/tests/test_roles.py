@@ -43,6 +43,46 @@ def test_list_filter_and_search(client):
     assert "pg_read_all_data" in names
 
 
+def names(client, **params):
+    r = client.get("/api/roles", params={"q": "t_", "limit": 100, **params})
+    assert r.status_code == 200, r.text
+    return [i["name"] for i in r.json()["items"]]
+
+
+def test_sorting(client):
+    create(client, "t_grp_a")
+    create(client, "t_grp_b")
+    create(client, "t_u1", login=True, member_of=["t_grp_a", "t_grp_b"], valid_until="2031-01-01T00:00:00Z")
+    create(client, "t_u2", login=True, member_of=["t_grp_a"], valid_until="2030-01-01T00:00:00Z", createdb=True)
+    create(client, "t_u3", login=True, superuser=True)  # never expires
+
+    assert names(client) == ["t_grp_a", "t_grp_b", "t_u1", "t_u2", "t_u3"]
+    assert names(client, order="desc") == ["t_u3", "t_u2", "t_u1", "t_grp_b", "t_grp_a"]
+    # by number of roles the account belongs to; ties broken by name
+    assert names(client, kind="user", sort="member_of", order="desc") == ["t_u1", "t_u2", "t_u3"]
+    assert names(client, kind="role", sort="members", order="desc") == ["t_grp_a", "t_grp_b"]
+    # soonest expiry first, NULL ("never") always last — in both directions
+    assert names(client, kind="user", sort="expires") == ["t_u2", "t_u1", "t_u3"]
+    assert names(client, kind="user", sort="expires", order="desc") == ["t_u1", "t_u2", "t_u3"]
+    assert names(client, kind="user", sort="privilege", order="desc")[0] == "t_u3"
+    # pagination stays consistent with the chosen order
+    page = client.get("/api/roles", params={"q": "t_", "sort": "name", "order": "desc", "limit": 2, "offset": 2}).json()
+    assert [i["name"] for i in page["items"]] == ["t_u1", "t_grp_b"] and page["total"] == 5
+    assert client.get("/api/roles", params={"sort": "rolpassword"}).status_code == 422
+
+
+def test_attribute_filters(client):
+    create(client, "t_super", login=True, superuser=True)
+    create(client, "t_plain", login=True)
+    create(client, "t_exp", login=True, valid_until="2000-01-01T00:00:00Z")
+    create(client, "t_member", login=True, member_of=["t_plain"])
+    assert names(client, attr="superuser") == ["t_super"]
+    assert names(client, attr="expired") == ["t_exp"]
+    assert "t_member" not in names(client, attr="no_memberships")
+    assert "t_plain" in names(client, attr="no_memberships")
+    assert client.get("/api/roles", params={"attr": "bogus"}).status_code == 422
+
+
 def test_duplicate_and_reserved_names(client):
     create(client, "t_dup")
     assert client.post("/api/roles", json={"name": "t_dup"}).status_code == 409

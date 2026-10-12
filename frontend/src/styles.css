@@ -296,6 +296,14 @@ button:disabled { cursor: not-allowed; }
 .table.clickable tbody tr:hover { background: var(--surface-2); }
 .table .num { text-align: right; width: 90px; font-variant-numeric: tabular-nums; }
 .table td.actions { text-align: right; white-space: nowrap; width: 130px; }
+.sort-btn { display: inline-flex; align-items: center; gap: 5px; padding: 2px 4px; margin: -2px -4px; border: 0; border-radius: 5px; background: transparent; font: inherit; text-transform: inherit; letter-spacing: inherit; color: inherit; }
+.sort-btn:hover, .sort-btn.active { color: var(--primary-text); }
+.sort-idle { opacity: 0.45; }
+.table .num .sort-btn { justify-content: flex-end; }
+.expiry { font-size: 13px; }
+.expiry.muted { color: var(--muted); }
+.expiry.warn { color: var(--warn); font-weight: 560; }
+.expiry.danger { color: var(--danger); font-weight: 560; }
 .name-cell { display: flex; align-items: center; gap: 12px; }
 .name-cell .name { font-weight: 600; }
 @media (max-width: 760px) { .table th:nth-child(3), .table td:nth-child(3) { display: none; } }

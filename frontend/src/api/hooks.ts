@@ -34,10 +34,16 @@ export const useSchemas = (database: string | undefined) =>
     staleTime: 30_000,
   });
 
+export type RoleSort = "name" | "member_of" | "members" | "expires" | "conn_limit" | "privilege";
+export type RoleAttr = "all" | "superuser" | "createrole" | "createdb" | "replication" | "bypassrls" | "expired" | "no_memberships";
+
 export interface RoleListParams {
   kind?: "all" | "user" | "role";
   q?: string;
   include_system?: boolean;
+  sort?: RoleSort;
+  order?: "asc" | "desc";
+  attr?: RoleAttr;
   limit?: number;
   offset?: number;
 }

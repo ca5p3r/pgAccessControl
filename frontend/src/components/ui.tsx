@@ -90,11 +90,11 @@ export function Field({ label, hint, error, children }: { label: string; hint?: 
   );
 }
 
-export function SearchInput({ value, onChange, placeholder = "Search…", ...rest }: { value: string; onChange: (v: string) => void } & Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "value">) {
+export function SearchInput({ value, onChange, placeholder = "Search…", inputRef, ...rest }: { value: string; onChange: (v: string) => void; inputRef?: React.Ref<HTMLInputElement> } & Omit<InputHTMLAttributes<HTMLInputElement>, "onChange" | "value">) {
   return (
     <div className="search">
       <Search size={15} />
-      <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} {...rest} />
+      <input ref={inputRef} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === "Escape" && value && onChange("")} placeholder={placeholder} aria-label={placeholder} {...rest} />
       {value && (
         <button className="search-clear" onClick={() => onChange("")} aria-label="Clear search">
           <X size={14} />

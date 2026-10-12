@@ -30,13 +30,26 @@ async def list_roles(
     kind: Literal["all", "user", "role"] = "all",
     q: str | None = Query(None, max_length=100),
     include_system: bool = False,
+    sort: Literal["name", "member_of", "members", "expires", "conn_limit", "privilege"] = "name",
+    order: Literal["asc", "desc"] = "asc",
+    attr: Literal[
+        "all", "superuser", "createrole", "createdb", "replication", "bypassrls", "expired", "no_memberships"
+    ] = "all",
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     pools: PoolManager = Depends(get_pools),
 ) -> RoleList:
     async with pools.connection() as conn:
         return await svc.list_roles(
-            conn, kind=kind, q=q, include_system=include_system, limit=limit, offset=offset
+            conn,
+            kind=kind,
+            q=q,
+            include_system=include_system,
+            limit=limit,
+            offset=offset,
+            sort=sort,
+            order=order,
+            attr=attr,
         )
 
 

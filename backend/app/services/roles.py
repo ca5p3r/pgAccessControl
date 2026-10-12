@@ -75,8 +75,39 @@ def _summary(row: dict[str, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
+# Whitelisted sort keys -> SQL expression (never interpolate client input directly).
+_SORTS = {
+    "name": "r.rolname",
+    "member_of": "(SELECT count(DISTINCT m.roleid) FROM pg_auth_members m WHERE m.member = r.oid)",
+    "members": "(SELECT count(DISTINCT m.member) FROM pg_auth_members m WHERE m.roleid = r.oid)",
+    "expires": "r.rolvaliduntil",
+    "conn_limit": "r.rolconnlimit",
+    "privilege": "(r.rolsuper::int * 8 + r.rolcreaterole::int * 4 + r.rolcreatedb::int * 2 + r.rolreplication::int)",
+}
+
+# Attribute filters -> SQL predicate.
+_ATTR_FILTERS = {
+    "superuser": "r.rolsuper",
+    "createrole": "r.rolcreaterole",
+    "createdb": "r.rolcreatedb",
+    "replication": "r.rolreplication",
+    "bypassrls": "r.rolbypassrls",
+    "expired": "(r.rolcanlogin AND r.rolvaliduntil < now())",
+    "no_memberships": "NOT EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid)",
+}
+
+
 async def list_roles(
-    conn: Conn, *, kind: str, q: str | None, include_system: bool, limit: int, offset: int
+    conn: Conn,
+    *,
+    kind: str,
+    q: str | None,
+    include_system: bool,
+    limit: int,
+    offset: int,
+    sort: str = "name",
+    order: str = "asc",
+    attr: str = "all",
 ) -> RoleList:
     where = ["TRUE"]
     params: dict[str, Any] = {"limit": limit, "offset": offset}
@@ -89,15 +120,22 @@ async def list_roles(
     if q:
         where.append("r.rolname ILIKE %(q)s")
         params["q"] = _like(q)
+    if attr in _ATTR_FILTERS:
+        where.append(_ATTR_FILTERS[attr])
+    direction = "DESC" if order == "desc" else "ASC"
+    sort_expr = _SORTS.get(sort, _SORTS["name"])
+    # NULLs (e.g. "never expires") always sort last; name is the stable tie-breaker.
+    ordering = f"{sort_expr} {direction} NULLS LAST, r.rolname ASC"
     query = f"""
         WITH base AS (
-            SELECT {_BASE_COLUMNS}, count(*) OVER () AS total
+            SELECT {_BASE_COLUMNS}, count(*) OVER () AS total,
+                   row_number() OVER (ORDER BY {ordering}) AS ord
               FROM pg_roles r
              WHERE {' AND '.join(where)}
-             ORDER BY r.rolname
+             ORDER BY ord
              LIMIT %(limit)s OFFSET %(offset)s
         )
-        {_ENRICH} ORDER BY b.name
+        {_ENRICH} ORDER BY b.ord
     """
     cur = await conn.execute(query, params)
     rows = await cur.fetchall()

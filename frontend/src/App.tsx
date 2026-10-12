@@ -30,9 +30,9 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
-        <Route path="users" element={<RolesPage kind="user" />} />
+        <Route path="users" element={<RolesPage key="users" kind="user" />} />
         <Route path="users/:name" element={<RoleDetail />} />
-        <Route path="roles" element={<RolesPage kind="role" />} />
+        <Route path="roles" element={<RolesPage key="roles" kind="role" />} />
         <Route path="roles/:name" element={<RoleDetail />} />
         <Route path="permissions" element={<PermissionsPage />} />
         <Route path="permissions/:name" element={<PermissionsPage />} />
