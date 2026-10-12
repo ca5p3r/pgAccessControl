@@ -14,6 +14,7 @@ A web console for managing **PostgreSQL roles, users and permissions** — React
 | **Snapshot** permissions and catch **drift** (changes made outside the app) | *Reports* → Snapshots & drift |
 | Let **several people** in with limited rights, or use **SSO** | *Accounts* (admin) and the `OIDC_*` settings |
 | Set **column-level** privileges, **grant option** and **grantor** | *columns* link on a table row; *Grant option* mode; Review → Advanced |
+| See everything a user or role **holds** (owned objects, grants, default privileges, grants it gave to others), e.g. before deleting it | A role's **Held grants** tab; the delete dialog links to it |
 | See **who changed what**, with the SQL and before/after values | *Activity* page, and a role's **Activity** tab  |
 | Find out **who can access** a table, view, sequence, function, schema or database | *Reports* → Who has access? (also a link on every grid row) |
 | **Export** permissions as SQL, CSV or JSON (whole database or one user/role) | *Reports* → Export, or the Export button on a role's Permissions tab |

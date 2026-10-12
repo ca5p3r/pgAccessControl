@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { Check, Copy, Dices, Eye, EyeOff, Hourglass, Lock, Shield, Users, X } from "lucide-react";
 import { useCan, useDependencies, useDeleteRole, useMeta, useRoles, useSetMembership, useTemporary, useTemporaryMutations } from "../api/hooks";
 import type { Membership, RoleDetail, RoleInput, RoleSummary } from "../api/types";
@@ -421,7 +422,7 @@ export function DeleteRoleDialog({ name, onClose, onDeleted }: { name: string; o
       ) : (
         <div className="stack-sm">
           <p>This removes the role and its memberships. This cannot be undone.</p>
-          {totalPriv > 0 && <Notice tone="info">{totalPriv} privilege grant{totalPriv === 1 ? "" : "s"} held by this role will be revoked.</Notice>}
+          {totalPriv > 0 && <Notice tone="info">{totalPriv} privilege grant{totalPriv === 1 ? "" : "s"} held by this role will be revoked. <Link to={`/roles/${encodeURIComponent(name)}?tab=held`} onClick={onClose} className="link-inline">See exactly which</Link></Notice>}
           {owns && (
             <>
               <Notice tone="warn">
@@ -431,6 +432,7 @@ export function DeleteRoleDialog({ name, onClose, onDeleted }: { name: string; o
                     <li key={d.database || "_shared"}><strong>{d.database || "cluster-wide"}</strong> — {d.owned_objects} object{d.owned_objects === 1 ? "" : "s"}</li>
                   ))}
                 </ul>
+                <Link to={`/roles/${encodeURIComponent(name)}?tab=held`} onClick={onClose} className="link-inline">See which objects</Link>
               </Notice>
               <Field label="Transfer ownership to" hint="Required. Owned objects are reassigned (never dropped) before the role is removed.">
                 <RolePicker single value={heir} onChange={setHeir} exclude={[name]} />

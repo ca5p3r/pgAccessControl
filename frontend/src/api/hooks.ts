@@ -21,6 +21,8 @@ import type {
   RoleInput,
   RoleList,
   DriftReport,
+  HoldingsDetail,
+  HoldingsSummary,
   Snapshot,
   Stats,
   TemporaryItem,
@@ -289,3 +291,10 @@ export const useDrift = (id: number | undefined, against?: number) =>
     enabled: id !== undefined,
     gcTime: 0,
   });
+
+/* ------------------------------------------------------------- held grants */
+export const useHoldingsSummary = (role: string) =>
+  useQuery({ queryKey: ["holdings", role], queryFn: () => api.get<HoldingsSummary>(`/roles/${enc(role)}/holdings`) });
+
+export const useHoldingsDetail = (role: string, database: string) =>
+  useQuery({ queryKey: ["holdings", role, database], queryFn: () => api.get<HoldingsDetail>(`/roles/${enc(role)}/holdings`, { database }) });

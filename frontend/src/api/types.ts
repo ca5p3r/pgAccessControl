@@ -298,3 +298,29 @@ export interface DriftReport {
   privileges: DriftSection<{ object_type: string; schema: string; name: string; args: string; col: string; grantee: string; privilege: string; grantable: boolean }>;
   defaults: DriftSection<{ for_role: string; schema: string | null; object_type: string; grantee: string; privilege: string; grantable: boolean }>;
 }
+
+export interface HeldObject {
+  kind: string;
+  description: string;
+}
+
+export interface HoldingsSummary {
+  role: string;
+  is_superuser: boolean;
+  owns_objects: boolean;
+  databases: Dependency[];
+  cluster: {
+    owned: HeldObject[];
+    privileges: { kind: string; name: string; privilege: string; grantable: boolean; grantor: string }[];
+    granted_to_others: { kind: string; name: string; privilege: string; grantable: boolean; grantee: string }[];
+  };
+}
+
+export interface HoldingsDetail {
+  database: string;
+  owned: HeldObject[];
+  policies: HeldObject[];
+  privileges: { object_type: string; schema: string; name: string; args: string; col: string; owner: string; grantee: string; privilege: string; grantable: boolean; grantor: string }[];
+  default_privileges: { for_role: string; schema: string | null; object_type: string; grantee: string; privilege: string; grantable: boolean }[];
+  granted_to_others: { object_type: string; schema: string; name: string; col: string; grantee: string; privilege: string; grantable: boolean }[];
+}

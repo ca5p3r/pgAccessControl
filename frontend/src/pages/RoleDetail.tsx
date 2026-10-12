@@ -1,14 +1,15 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { ArrowLeft, History, KeyRound, Settings2, Shield, Trash2 } from "lucide-react";
+import { ArrowLeft, History, KeyRound, ListChecks, Settings2, Shield, Trash2 } from "lucide-react";
 import { useCan, useRole, useUpdateRole } from "../api/hooks";
 import type { RoleDetail as RoleDetailT } from "../api/types";
 import { Avatar, Badge, Button, ErrorNote, Notice, Spinner, Tabs, useToast } from "../components/ui";
 import { DeleteRoleDialog, MembershipEditor, RoleBadges, RoleForm } from "../components/roles";
 import { PermissionEditor } from "../components/PermissionEditor";
 import { ActivityTable } from "../components/activity";
+import { HeldGrants } from "../components/HeldGrants";
 
-type TabId = "settings" | "membership" | "permissions" | "activity";
+type TabId = "settings" | "membership" | "permissions" | "held" | "activity";
 
 export function RoleDetail() {
   const { name = "" } = useParams();
@@ -54,6 +55,7 @@ export function RoleDetail() {
           { id: "settings", label: "Settings", icon: <Settings2 size={15} /> },
           { id: "membership", label: "Membership", icon: <Shield size={15} />, count: role.memberships.length + role.members.length },
           { id: "permissions", label: "Permissions", icon: <KeyRound size={15} /> },
+          { id: "held", label: "Held grants", icon: <ListChecks size={15} /> },
           { id: "activity", label: "Activity", icon: <History size={15} /> },
         ]}
       />
@@ -63,6 +65,7 @@ export function RoleDetail() {
         {tab === "settings" && <SettingsTab role={role} />}
         {tab === "membership" && !role.is_system && <MembershipEditor role={role} />}
         {tab === "permissions" && <PermissionEditor role={role.name} />}
+        {tab === "held" && <HeldGrants role={role} />}
         {tab === "activity" && <ActivityTable filters={{ target: role.name }} page={activityPage} onPage={setActivityPage} size={15} />}
       </div>
 

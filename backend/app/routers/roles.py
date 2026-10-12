@@ -19,6 +19,7 @@ from ..schemas import (
 )
 from ..rbac import ensure_attributes_allowed, ensure_role_editable, ensure_roles_grantable
 from ..security import Principal, require_admin, require_operator
+from ..services import holdings
 from ..services import roles as svc
 
 router = APIRouter(prefix="/roles", tags=["roles"])
@@ -162,6 +163,17 @@ async def _membership(
             await (svc.set_member_of if up else svc.set_members)(conn, name, specs)
     async with pools.connection() as conn:
         return await svc.get_role(conn, name)
+
+
+@router.get("/{name:path}/holdings")
+async def role_holdings(name: str, database: str | None = None, pools: PoolManager = Depends(get_pools)) -> dict:
+    """What a role holds. Without ``database``: counts per database plus cluster-wide items.
+    With ``database``: owned objects, privileges, default privileges and grants given to others in it."""
+    if database is None:
+        async with pools.connection() as conn:
+            return await holdings.summary(conn, name)
+    async with pools.connection(database) as conn:
+        return await holdings.detail(conn, name)
 
 
 @router.put("/{name:path}/member-of", response_model=RoleDetail)
