@@ -80,9 +80,11 @@ export interface Meta {
   connected_as: string;
   is_superuser: boolean;
   can_create_roles: boolean;
-  host: string;
-  port: number;
-  database: string;
+  host: string | null; // connection details are for admins only
+  port: number | null;
+  database: string | null;
+  server: ServerInfo;
+  read_only: boolean;
   audit_enabled: boolean;
   membership_options: boolean;
   privileges: Record<ObjType, string[]>;
@@ -176,6 +178,8 @@ export interface AuditEntry {
   target_type: string | null;
   target: string | null;
   database: string | null;
+  server: string | null;
+  server_name: string | null;
   status: "success" | "failed";
   summary: string;
   statements: string[];
@@ -195,6 +199,7 @@ export interface AuditFilters {
   action?: string;
   target?: string;
   database?: string;
+  server?: string;
   status?: string;
   q?: string;
   date_from?: string;
@@ -323,4 +328,74 @@ export interface HoldingsDetail {
   privileges: { object_type: string; schema: string; name: string; args: string; col: string; owner: string; grantee: string; privilege: string; grantable: boolean; grantor: string }[];
   default_privileges: { for_role: string; schema: string | null; object_type: string; grantee: string; privilege: string; grantable: boolean }[];
   granted_to_others: { object_type: string; schema: string; name: string; col: string; grantee: string; privilege: string; grantable: boolean }[];
+}
+
+export type Environment = "production" | "staging" | "development" | "other";
+export type SslMode = "disable" | "allow" | "prefer" | "require" | "verify-ca" | "verify-full";
+
+export interface ServerInfo {
+  id: string;
+  name: string;
+  description: string | null;
+  environment: Environment;
+  read_only: boolean;
+  min_role: "viewer" | "operator" | "admin";
+  disabled: boolean;
+  is_default: boolean;
+  encrypted_connection: boolean;
+  // admins only
+  host?: string;
+  port?: number;
+  user?: string;
+  database?: string;
+  sslmode?: SslMode;
+  ssl_ca?: string | null;
+  connect_timeout?: number;
+  has_password?: boolean;
+  created_at?: string | null;
+  created_by?: string | null;
+  updated_at?: string | null;
+  updated_by?: string | null;
+}
+
+export interface ServersResponse {
+  items: ServerInfo[];
+  management_enabled: boolean;
+  encryption: { ready: boolean; fallback_to_secret_key: boolean };
+  max: number;
+  allowlist_active: boolean;
+}
+
+export interface ServerStatus {
+  ok: boolean;
+  latency_ms?: number;
+  server_version?: string;
+  error?: string;
+  hint?: string | null;
+  // admins only
+  connected_as?: string;
+  is_superuser?: boolean;
+  can_create_roles?: boolean;
+  ssl?: boolean;
+}
+
+export interface ServerTestResult extends ServerStatus {
+  warnings: string[];
+}
+
+export interface ServerFormValues {
+  name: string;
+  description: string;
+  environment: Environment;
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+  sslmode: SslMode;
+  ssl_ca: string;
+  connect_timeout: number;
+  read_only: boolean;
+  min_role: "viewer" | "operator" | "admin";
+  disabled: boolean;
 }

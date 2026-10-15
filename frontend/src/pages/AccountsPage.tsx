@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Ban, CheckCircle2, Dices, KeyRound, Plus, ShieldCheck, Trash2, UserCog } from "lucide-react";
-import { useAppUserMutations, useAppUsers, useAuth, useCan } from "../api/hooks";
+import { useAppUserMutations, useAppUsers, useAuth, useIsAdmin } from "../api/hooks";
 import type { AppUser } from "../api/types";
 import { timeAgo } from "../components/activity";
 import { Avatar, Badge, Button, ConfirmDialog, Empty, ErrorNote, Field, IconButton, Modal, Notice, Spinner, cx, useToast } from "../components/ui";
@@ -65,16 +65,16 @@ function ResetDialog({ user, onClose }: { user: AppUser; onClose: () => void }) 
 }
 
 export function AccountsPage() {
-  const { can } = useCan();
+  const isAdmin = useIsAdmin();
   const auth = useAuth();
-  const users = useAppUsers(can("admin"));
+  const users = useAppUsers(isAdmin);
   const { update, remove } = useAppUserMutations();
   const toast = useToast();
   const [creating, setCreating] = useState(false);
   const [reset, setReset] = useState<AppUser | null>(null);
   const [deleting, setDeleting] = useState<AppUser | null>(null);
 
-  if (!can("admin")) return <div className="page"><Empty icon={<ShieldCheck size={30} />} title="Admins only">Only administrators can manage console accounts.</Empty></div>;
+  if (!isAdmin) return <div className="page"><Empty icon={<ShieldCheck size={30} />} title="Admins only">Only administrators can manage console accounts.</Empty></div>;
   const me = users.data?.me;
 
   return (

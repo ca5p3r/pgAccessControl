@@ -4,6 +4,7 @@ import { Check, Copy, Dices, Eye, EyeOff, Hourglass, Lock, Shield, Users, X } fr
 import { useCan, useDependencies, useDeleteRole, useMeta, useRoles, useSetMembership, useTemporary, useTemporaryMutations } from "../api/hooks";
 import type { Membership, RoleDetail, RoleInput, RoleSummary } from "../api/types";
 import { ExpiryPicker, toLocalInput, until } from "./expiry";
+import { ProductionConfirm } from "./ProductionConfirm";
 import { Avatar, Badge, Button, ErrorNote, Field, IconButton, Modal, Notice, Spinner, Switch, cx, useDebounced, useToast } from "./ui";
 
 /* ------------------------------------------------------------ attributes */
@@ -396,10 +397,11 @@ export function DeleteRoleDialog({ name, onClose, onDeleted }: { name: string; o
   const deps = useDependencies(name, true);
   const del = useDeleteRole();
   const [heir, setHeir] = useState<string[]>([]);
+  const [prodOk, setProdOk] = useState(true);
   const toast = useToast();
   const owns = deps.data?.owns_objects ?? false;
   const totalPriv = deps.data?.dependencies.reduce((a, d) => a + d.privileges, 0) ?? 0;
-  const ready = !!deps.data && (!owns || heir.length === 1);
+  const ready = !!deps.data && (!owns || heir.length === 1) && prodOk;
 
   return (
     <Modal
@@ -422,6 +424,7 @@ export function DeleteRoleDialog({ name, onClose, onDeleted }: { name: string; o
       ) : (
         <div className="stack-sm">
           <p>This removes the role and its memberships. This cannot be undone.</p>
+          <ProductionConfirm onChange={setProdOk} />
           {totalPriv > 0 && <Notice tone="info">{totalPriv} privilege grant{totalPriv === 1 ? "" : "s"} held by this role will be revoked. <Link to={`/roles/${encodeURIComponent(name)}?tab=held`} onClick={onClose} className="link-inline">See exactly which</Link></Notice>}
           {owns && (
             <>

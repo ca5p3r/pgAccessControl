@@ -25,9 +25,10 @@ async def meta(request: Request, pools: PoolManager = Depends(get_pools)) -> dic
         "connected_as": row["user"],
         "is_superuser": row["rolsuper"],
         "can_create_roles": row["rolsuper"] or row["rolcreaterole"],
-        "host": pools.settings.pg_host,
-        "port": pools.settings.pg_port,
-        "database": pools.settings.pg_database,
+        "server": request.state.server.public(admin=False),
+        "read_only": request.state.principal.capped,
+        # connection details are for admins only
+        **({"host": pools.profile.host, "port": pools.profile.port, "database": pools.profile.database} if request.state.principal.can("admin") else {"host": None, "port": None, "database": None}),
         "audit_enabled": request.app.state.audit.enabled,
         "membership_options": version_num >= 160000,
         "privileges": privilege_catalog(version_num),

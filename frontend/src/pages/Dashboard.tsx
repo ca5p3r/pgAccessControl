@@ -5,6 +5,7 @@ import { Avatar, ErrorNote, Notice, Spinner } from "../components/ui";
 import { RoleBadges } from "../components/roles";
 import { ActionBadge, timeAgo } from "../components/activity";
 import { until } from "../components/expiry";
+import { EnvBadge } from "../components/server";
 
 function Stat({ icon, label, value, tone, to }: { icon: JSX.Element; label: string; value: number | string; tone: string; to?: string }) {
   const body = (
@@ -37,7 +38,7 @@ export function Dashboard() {
         <div>
           <h1>Overview</h1>
           <p className="muted">
-            {meta.data ? `PostgreSQL ${meta.data.server_version} on ${meta.data.host}:${meta.data.port}` : "Connected"}
+            {meta.data ? <>{meta.data.server.name} <EnvBadge env={meta.data.server.environment} compact /> · PostgreSQL {meta.data.server_version}{meta.data.host ? ` on ${meta.data.host}:${meta.data.port}` : ""}</> : "Connected"}
           </p>
         </div>
       </div>

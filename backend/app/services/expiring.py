@@ -165,12 +165,12 @@ def _dict(r: sqlite3.Row) -> dict[str, Any]:
     return d
 
 
-def db_insert(c: sqlite3.Connection, kind: str, grantee: str, database: str | None, description: str,
+def db_insert(c: sqlite3.Connection, server_id: str, kind: str, grantee: str, database: str | None, description: str,
               spec: dict[str, Any], created_by: str, expires_at: str) -> int:
     cur = c.execute(
-        """INSERT INTO expiring_access (kind, grantee, database, description, revoke_spec, created_at, created_by, expires_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (kind, grantee, database, description, json.dumps(spec), iso(now()), created_by, expires_at),
+        """INSERT INTO expiring_access (server_id, kind, grantee, database, description, revoke_spec, created_at, created_by, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (server_id, kind, grantee, database, description, json.dumps(spec), iso(now()), created_by, expires_at),
     )
     return int(cur.lastrowid)
 
@@ -180,8 +180,11 @@ def db_get(c: sqlite3.Connection, schedule_id: int) -> dict[str, Any] | None:
     return _dict(r) if r else None
 
 
-def db_list(c: sqlite3.Connection, status: str, involving: str | None, limit: int) -> list[dict[str, Any]]:
+def db_list(c: sqlite3.Connection, status: str, involving: str | None, limit: int, server_id: str | None = None) -> list[dict[str, Any]]:
     where, p = [], []
+    if server_id:
+        where.append("server_id = ?")
+        p.append(server_id)
     if status == "pending":
         where.append("status IN ('pending', 'running')")
     elif status == "history":
@@ -202,7 +205,9 @@ def db_claim_due(c: sqlite3.Connection, now_iso: str, limit: int) -> list[dict[s
     """Atomically take due schedules so several workers never run the same one twice."""
     rows = c.execute(
         """UPDATE expiring_access SET status = 'running'
-            WHERE id IN (SELECT id FROM expiring_access WHERE status = 'pending' AND expires_at <= ? ORDER BY expires_at LIMIT ?)
+            WHERE id IN (SELECT id FROM expiring_access WHERE status = 'pending' AND expires_at <= ?
+                            AND server_id NOT IN (SELECT id FROM servers WHERE disabled = 1)
+                          ORDER BY expires_at LIMIT ?)
               AND status = 'pending' RETURNING *""",
         (now_iso, limit),
     ).fetchall()
@@ -231,11 +236,11 @@ def db_cancel(c: sqlite3.Connection, schedule_id: int) -> bool:
     ).rowcount > 0
 
 
-def db_find_membership(c: sqlite3.Connection, role: str, member: str) -> dict[str, Any] | None:
+def db_find_membership(c: sqlite3.Connection, server_id: str, role: str, member: str) -> dict[str, Any] | None:
     r = c.execute(
-        """SELECT * FROM expiring_access WHERE kind = 'membership' AND grantee = ? AND json_extract(revoke_spec, '$.role') = ?
-              AND status IN ('pending', 'running')""",
-        (member, role),
+        """SELECT * FROM expiring_access WHERE server_id = ? AND kind = 'membership' AND grantee = ?
+              AND json_extract(revoke_spec, '$.role') = ? AND status IN ('pending', 'running')""",
+        (server_id, member, role),
     ).fetchone()
     return _dict(r) if r else None
 
@@ -243,14 +248,15 @@ def db_find_membership(c: sqlite3.Connection, role: str, member: str) -> dict[st
 # ---------------------------------------------------------------------------
 # Execution
 # ---------------------------------------------------------------------------
-async def _perform(app: Any, row: dict[str, Any]) -> None:
+async def _perform(app: Any, row: dict[str, Any], profile: Any) -> None:
     spec = row["spec"]
+    pools = await app.state.servers.manager(profile)  # the server the access was granted on, not "the" server
     if row["kind"] == "grant":
         changes = [PermissionChange.model_validate(c) for c in spec["changes"]]
-        async with app.state.pools.connection(row["database"]) as conn:
+        async with pools.connection(row["database"]) as conn:
             await perm.apply_changes(conn, row["grantee"], changes, dry_run=False)
     else:
-        async with app.state.pools.connection() as conn:
+        async with pools.connection() as conn:
             await roles_svc._revoke_role(conn, spec["role"], row["grantee"])
 
 
@@ -259,15 +265,18 @@ async def run_row(app: Any, row: dict[str, Any], *, actor: str = "scheduler", ac
     store = app.state.store
     verb = "ended" if action == "access.expired" else "revoked now"
     status, error = "expired", None
+    profile = await app.state.servers.get(row["server_id"])
     try:
+        if profile is None:
+            raise AppError("The server this access was granted on is no longer configured.", 409)
         async with audited_system(
             app.state.audit, action, target=row["grantee"], target_type="permission" if row["kind"] == "grant" else "role",
-            database=row["database"], actor=actor,
+            database=row["database"], actor=actor, server=profile,
         ) as a:
             a.summary = f"Temporary access {verb} for {row['grantee']}: {row['description']}"
             a.details = {"schedule_id": row["id"], "expires_at": row["expires_at"], "created_by": row["created_by"]}
             try:
-                await _perform(app, row)
+                await _perform(app, row, profile)
             except NotFound:  # the role was deleted meanwhile: its access is gone with it
                 a.details["note"] = "already removed (role or object no longer exists)"
             except psycopg.Error as exc:

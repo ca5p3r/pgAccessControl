@@ -20,6 +20,17 @@ services:
       PG_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD in .env}
       PG_DATABASE: ${PG_DATABASE:-postgres}
       PG_SSLMODE: ${PG_SSLMODE:-prefer}
+      # How the server above is shown, and whether the console may change it
+      PG_SERVER_NAME: ${PG_SERVER_NAME:-Default server}
+      PG_ENVIRONMENT: ${PG_ENVIRONMENT:-other}
+      PG_READ_ONLY: ${PG_READ_ONLY:-false}
+      # --- Managing several servers ---
+      SERVER_MANAGEMENT_ENABLED: ${SERVER_MANAGEMENT_ENABLED:-true}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+      ENCRYPTION_KEY_PREVIOUS: ${ENCRYPTION_KEY_PREVIOUS:-}
+      SERVER_HOST_ALLOWLIST: ${SERVER_HOST_ALLOWLIST:-}
+      MAX_SERVER_PROFILES: ${MAX_SERVER_PROFILES:-50}
+      MAX_OPEN_SERVERS: ${MAX_OPEN_SERVERS:-16}
       # --- Pooling ---
       POOL_MIN_SIZE: ${POOL_MIN_SIZE:-1}
       POOL_MAX_SIZE: ${POOL_MAX_SIZE:-5}

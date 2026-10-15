@@ -5,6 +5,7 @@ import { downloadUrl, useAuditFacets, useMeta } from "../api/hooks";
 import type { AuditFilters } from "../api/types";
 import { ActivityTable } from "../components/activity";
 import { Button, Notice, SearchInput, Switch, useDebounced } from "../components/ui";
+import { useServerContext } from "../components/server";
 
 const CATEGORIES = [
   { value: "", label: "All activity" },
@@ -15,14 +16,17 @@ const CATEGORIES = [
   { value: "snapshot.", label: "Snapshots" },
   { value: "drift.", label: "Drift alerts" },
   { value: "account.", label: "Console accounts" },
+  { value: "server.", label: "Server management" },
   { value: "export.", label: "Exports" },
 ];
-const KEYS = ["q", "actor", "action", "status", "date_from", "date_to", "target"] as const;
+const KEYS = ["q", "actor", "action", "status", "date_from", "date_to", "target", "server"] as const;
 
 export function ActivityPage() {
   const [sp, setSp] = useSearchParams();
   const meta = useMeta();
   const facets = useAuditFacets();
+  const { servers, current } = useServerContext();
+  const allServers = sp.get("server") === "*";
   const [live, setLive] = useState(false);
   const page = Math.max(0, Number(sp.get("page") ?? 0) || 0);
 
@@ -76,13 +80,19 @@ export function ActivityPage() {
         </select>
         <label className="date-field"><span className="muted">From</span><input className="input" type="date" value={sp.get("date_from") ?? ""} max={sp.get("date_to") ?? undefined} onChange={(e) => update({ date_from: e.target.value })} /></label>
         <label className="date-field"><span className="muted">To</span><input className="input" type="date" value={sp.get("date_to") ?? ""} min={sp.get("date_from") ?? undefined} onChange={(e) => update({ date_to: e.target.value })} /></label>
+        {servers.length > 1 && (
+          <select className="select" value={allServers ? "*" : "this"} onChange={(e) => update({ server: e.target.value === "*" ? "*" : null })} aria-label="Which servers">
+            <option value="this">{current.name} only</option>
+            <option value="*">All servers</option>
+          </select>
+        )}
         {active && <Button size="sm" variant="ghost" icon={<X size={14} />} onClick={clear}>Clear</Button>}
         <span className="grow" />
         <Switch label="Live" checked={live} onChange={setLive} />
       </div>
       {sp.get("target") && <Notice tone="info">Showing activity for <strong className="mono">{sp.get("target")}</strong>. <button className="link-btn" onClick={() => update({ target: null })}>Show all</button></Notice>}
 
-      <ActivityTable filters={filters} page={page} onPage={(p) => update({ page: p ? String(p) : null }, false)} live={live} />
+      <ActivityTable filters={filters} showServer={allServers} page={page} onPage={(p) => update({ page: p ? String(p) : null }, false)} live={live} />
     </div>
   );
 }

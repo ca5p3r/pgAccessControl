@@ -35,13 +35,13 @@ async def list_schedules(
     involving: str | None = None,
     limit: int = Query(200, ge=1, le=1000),
 ) -> dict:
-    items = await request.app.state.store.run(ex.db_list, status, involving, limit)
+    items = await request.app.state.store.run(ex.db_list, status, involving, limit, request.state.server.id)
     return {"items": items}
 
 
 async def _get(request: Request, schedule_id: int) -> dict[str, Any]:
     row = await request.app.state.store.run(ex.db_get, schedule_id)
-    if row is None:
+    if row is None or row["server_id"] != request.state.server.id:  # schedules of other servers do not exist here
         raise NotFound(f"Schedule {schedule_id} does not exist")
     return row
 
@@ -52,7 +52,8 @@ async def set_membership_expiry(
 ) -> dict:
     """Make a role membership temporary (or permanent again with ``expires_at: null``)."""
     store = request.app.state.store
-    existing = await store.run(ex.db_find_membership, body.role, body.member)
+    server_id = request.state.server.id
+    existing = await store.run(ex.db_find_membership, server_id, body.role, body.member)
     async with audited(request, me.username, "access.schedule", target=body.member) as a:
         if body.expires_at is None:
             if existing:
@@ -75,7 +76,7 @@ async def set_membership_expiry(
             sid = existing["id"]
         else:
             sid = await store.run(
-                ex.db_insert, "membership", body.member, None, f"membership of {body.role}", {"role": body.role}, me.username, ex.iso(when)
+                ex.db_insert, server_id, "membership", body.member, None, f"membership of {body.role}", {"role": body.role}, me.username, ex.iso(when)
             )
         return {"schedule": await store.run(ex.db_get, sid)}
 
@@ -106,6 +107,7 @@ async def extend(schedule_id: int, body: Extend, request: Request, me: Principal
 @router.post("/{schedule_id}/revoke-now")
 async def revoke_now(schedule_id: int, request: Request, me: Principal = Depends(require_operator)) -> dict:
     """End the access immediately (also retries a failed revocation)."""
+    await _get(request, schedule_id)  # 404 unless it belongs to the selected server
     row = await request.app.state.store.run(ex.db_claim_one, schedule_id)
     if row is None:
         raise AppError("This schedule is no longer active.", 409)

@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, enc, qs } from "./client";
+import { api, enc, getCurrentServer, qs } from "./client";
 import type {
   AccessReport,
   AppUser,
@@ -8,6 +8,10 @@ import type {
   AuditList,
   AuthState,
   ObjectItem,
+  ServerInfo,
+  ServerStatus,
+  ServerTestResult,
+  ServersResponse,
   DatabaseInfo,
   DefaultPrivilege,
   DependencyReport,
@@ -37,8 +41,16 @@ const RANK: Record<AppRole, number> = { viewer: 1, operator: 2, admin: 3 };
 /** What the signed-in app user may do. The server enforces it; this only hides controls that would be refused. */
 export function useCan() {
   const auth = useAuth();
-  const role: AppRole = auth.data?.role ?? "admin";
+  const base: AppRole = auth.data?.role ?? "admin";
+  const role: AppRole = getCurrentServer()?.readOnly ? "viewer" : base;
   return { role, can: (min: AppRole) => RANK[role] >= RANK[min] };
+}
+
+/** The signed-in user's own role. Unlike useCan(), it is not lowered by a read-only server: administration of
+ *  accounts and server profiles is about the console, not about the selected server. */
+export function useIsAdmin() {
+  const auth = useAuth();
+  return (auth.data?.role ?? "admin") === "admin";
 }
 
 export const useMeta = () => useQuery({ queryKey: ["meta"], queryFn: () => api.get<Meta>("/meta"), staleTime: 5 * 60_000 });
@@ -200,7 +212,8 @@ export const useAccessReport = (database: string | undefined, type: ObjType, oid
   });
 
 /** URL for a file download served by the API (same-origin, so the session cookie is sent). */
-export const downloadUrl = (path: string, params: Record<string, string | number | boolean | null | undefined>) => `/api${path}${qs(params)}`;
+export const downloadUrl = (path: string, params: Record<string, string | number | boolean | null | undefined>) =>
+  `/api${path}${qs({ server: getCurrentServer()?.id, ...params })}`; // downloads cannot send headers, so the server id rides in the URL
 
 export const useColumnPrivileges = (role: string, database: string | undefined, schema: string, table: string) =>
   useQuery({
@@ -298,3 +311,30 @@ export const useHoldingsSummary = (role: string) =>
 
 export const useHoldingsDetail = (role: string, database: string) =>
   useQuery({ queryKey: ["holdings", role, database], queryFn: () => api.get<HoldingsDetail>(`/roles/${enc(role)}/holdings`, { database }) });
+
+/* ------------------------------------------------------------------ servers */
+export const useServers = (enabled = true) =>
+  useQuery({ queryKey: ["servers"], queryFn: () => api.get<ServersResponse>("/servers"), enabled, staleTime: 15_000 });
+
+export const useServerStatus = (enabled = true) =>
+  useQuery({
+    queryKey: ["server-status"],
+    queryFn: () => api.get<{ items: Record<string, ServerStatus> }>("/servers/status"),
+    enabled,
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+  });
+
+export const useServerUsage = (id: string | undefined) =>
+  useQuery({ queryKey: ["server-usage", id], queryFn: () => api.get<{ pending_schedules: number; snapshots: number }>(`/servers/${enc(id!)}/usage`), enabled: !!id, gcTime: 0 });
+
+export function useServerMutations(onDone?: () => void) {
+  // The server list lives above the per-server cache, so the caller refreshes it (see ServerProvider.refresh).
+  return {
+    create: useMutation({ mutationFn: (b: Record<string, unknown>) => api.post<ServerInfo>("/servers", b), onSuccess: onDone }),
+    update: useMutation({ mutationFn: ({ id, ...b }: { id: string } & Record<string, unknown>) => api.patch<ServerInfo>(`/servers/${enc(id)}`, b), onSuccess: onDone }),
+    remove: useMutation({ mutationFn: (id: string) => api.del(`/servers/${enc(id)}`), onSuccess: onDone }),
+    test: useMutation({ mutationFn: (b: Record<string, unknown>) => api.post<ServerTestResult>("/servers/test", b) }),
+  };
+}

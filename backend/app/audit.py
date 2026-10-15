@@ -44,7 +44,9 @@ CREATE TABLE IF NOT EXISTS audit_log (
     summary     TEXT NOT NULL,
     statements  TEXT,
     details     TEXT,
-    error       TEXT
+    error       TEXT,
+    server      TEXT,
+    server_name TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_audit_ts     ON audit_log (ts DESC);
 CREATE INDEX IF NOT EXISTS ix_audit_target ON audit_log (target, ts DESC);
@@ -106,6 +108,7 @@ class AuditStore:
         self.enabled = settings.audit_enabled
         self.path = settings.audit_db_path
         self.retention_days = settings.audit_retention_days
+        self.default_server_name = settings.pg_server_name
 
     # -- plumbing -------------------------------------------------------
     def _connect(self) -> sqlite3.Connection:
@@ -121,6 +124,18 @@ class AuditStore:
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(_SCHEMA)
+            have = {r[1] for r in conn.execute("PRAGMA table_info(audit_log)")}
+            for col in ("server", "server_name"):  # files created before multi-server support
+                if col not in have:
+                    conn.execute(f"ALTER TABLE audit_log ADD COLUMN {col} TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_audit_server ON audit_log (server, ts DESC)")
+            # Entries from before multi-server support were all about the one environment server. Assign them to it
+            # once; sign-in, account and server-management entries are not about any server and stay without one.
+            conn.execute(
+                """UPDATE audit_log SET server = 'default', server_name = ?
+                    WHERE server IS NULL AND action NOT LIKE 'auth.%' AND action NOT LIKE 'account.%' AND action NOT LIKE 'server.%'""",
+                (self.default_server_name,),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -131,9 +146,9 @@ class AuditStore:
         try:
             conn.execute(
                 """INSERT INTO audit_log (ts, actor, ip, action, target_type, target, database, status,
-                                          summary, statements, details, error)
+                                          summary, statements, details, error, server, server_name)
                    VALUES (:ts, :actor, :ip, :action, :target_type, :target, :database, :status,
-                           :summary, :statements, :details, :error)""",
+                           :summary, :statements, :details, :error, :server, :server_name)""",
                 e,
             )
             conn.commit()
@@ -155,6 +170,8 @@ class AuditStore:
             "statements": json.dumps(e.get("statements") or []),
             "details": json.dumps(e.get("details") or {}, default=str),
             "error": e.get("error"),
+            "server": e.get("server"),
+            "server_name": e.get("server_name"),
         }
         log.info(json.dumps({k: v for k, v in row.items() if k not in ("statements", "details") or v not in ("[]", "{}")}))
         if not self.enabled:
@@ -172,6 +189,15 @@ class AuditStore:
             if f.get(key):
                 clauses.append(f"{column} = :{key}")
                 p[key] = f[key]
+        if f.get("server"):
+            clauses.append("server = :server")
+            p["server"] = f["server"]
+        elif f.get("servers_in") is not None:
+            # entries not tied to a server (sign-ins, accounts) are visible to everyone
+            names = {f"srv{i}": sid for i, sid in enumerate(f["servers_in"])}
+            marks = ", ".join(f":{k}" for k in names)
+            clauses.append(f"(server IS NULL OR server IN ({marks}))" if names else "server IS NULL")
+            p.update(names)
         if f.get("action"):
             clauses.append("action LIKE :action ESCAPE '\\'")
             p["action"] = _escape_like(f["action"])[1:]  # prefix match: "role." matches role.create, ...
@@ -216,7 +242,7 @@ class AuditStore:
             return [], 0
         return await asyncio.to_thread(self._query, f, limit, offset)
 
-    def _facets(self) -> dict[str, list[str]]:
+    def _facets(self) -> dict[str, list]:
         conn = self._connect()
         try:
             return {
@@ -224,13 +250,19 @@ class AuditStore:
                 "databases": [
                     r[0] for r in conn.execute("SELECT DISTINCT database FROM audit_log WHERE database IS NOT NULL ORDER BY 1")
                 ],
+                "servers": [
+                    {"id": r[0], "name": r[1]}
+                    for r in conn.execute(
+                        "SELECT server, MAX(server_name) FROM audit_log WHERE server IS NOT NULL GROUP BY server ORDER BY 2"
+                    )
+                ],
             }
         finally:
             conn.close()
 
-    async def facets(self) -> dict[str, list[str]]:
+    async def facets(self) -> dict[str, list]:
         if not self.enabled:
-            return {"actors": [], "databases": []}
+            return {"actors": [], "databases": [], "servers": []}
         return await asyncio.to_thread(self._facets)
 
     def _purge(self) -> int:
@@ -276,7 +308,8 @@ def _error_text(exc: BaseException) -> str:
 
 @asynccontextmanager
 async def _audit_ctx(
-    store: AuditStore, *, actor: str, ip: str | None, action: str, target: str | None, target_type: str, database: str | None
+    store: AuditStore, *, actor: str, ip: str | None, action: str, target: str | None, target_type: str,
+    database: str | None, server: Any = None,
 ) -> AsyncIterator[AuditEntry]:
     entry = AuditEntry(database=database)
     token = _statements.set(entry.statements)
@@ -295,6 +328,7 @@ async def _audit_ctx(
             actor=actor, ip=ip, action=action, target_type=target_type, target=target,
             database=entry.database, status=status, summary=summary, statements=entry.statements,
             details=entry.details, error=error,
+            server=getattr(server, "id", None), server_name=getattr(server, "name", None),
         )
 
 
@@ -307,11 +341,13 @@ async def audited(
     target: str | None,
     target_type: str = "role",
     database: str | None = None,
+    server: Any = None,
 ) -> AsyncIterator[AuditEntry]:
-    """Record the outcome of the wrapped operation. Set ``entry.summary`` / ``entry.details`` inside."""
+    """Record the outcome of the wrapped operation. Set ``entry.summary`` / ``entry.details`` inside.
+    The server is taken from the request unless given explicitly."""
     async with _audit_ctx(
         request.app.state.audit, actor=actor, ip=_client(request), action=action, target=target,
-        target_type=target_type, database=database,
+        target_type=target_type, database=database, server=server or getattr(request.state, "server", None),
     ) as entry:
         yield entry
 
@@ -319,10 +355,12 @@ async def audited(
 @asynccontextmanager
 async def audited_system(
     store: AuditStore, action: str, *, target: str | None, target_type: str = "role", database: str | None = None,
-    actor: str = "scheduler",
+    actor: str = "scheduler", server: Any = None,
 ) -> AsyncIterator[AuditEntry]:
     """Same as ``audited`` for background jobs that have no request."""
-    async with _audit_ctx(store, actor=actor, ip=None, action=action, target=target, target_type=target_type, database=database) as entry:
+    async with _audit_ctx(
+        store, actor=actor, ip=None, action=action, target=target, target_type=target_type, database=database, server=server
+    ) as entry:
         yield entry
 
 
@@ -330,4 +368,6 @@ async def log_event(request: Request, actor: str, action: str, summary: str, sta
     await request.app.state.audit.record(
         actor=actor, ip=_client(request), action=action, target_type="session", target=actor,
         status=status, summary=summary,
+        server=getattr(getattr(request.state, "server", None), "id", None),
+        server_name=getattr(getattr(request.state, "server", None), "name", None),
     )

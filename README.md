@@ -13,6 +13,7 @@ A web console for managing **PostgreSQL roles, users and permissions** — React
 | Give access that **ends by itself** (grants and memberships) | *Make this temporary* when applying, or *set expiry* on a membership; manage under **Temporary access** |
 | **Snapshot** permissions and catch **drift** (changes made outside the app) | *Reports* → Snapshots & drift |
 | Let **several people** in with limited rights, or use **SSO** | *Accounts* (admin) and the `OIDC_*` settings |
+| Manage **several PostgreSQL servers** and switch between them | The **server switcher** (top of the sidebar, `Alt+S`) and the *Servers* page (admin) |
 | Set **column-level** privileges, **grant option** and **grantor** | *columns* link on a table row; *Grant option* mode; Review → Advanced |
 | See everything a user or role **holds** (owned objects, grants, default privileges, grants it gave to others), e.g. before deleting it | A role's **Held grants** tab; the delete dialog links to it |
 | See **who changed what**, with the SQL and before/after values | *Activity* page, and a role's **Activity** tab  |
@@ -43,6 +44,12 @@ To administer an existing server, set `PG_HOST` (use `host.docker.internal` for 
 | `PG_USER` / `PG_PASSWORD` | `postgres` / – | Account used to administer (superuser recommended) |
 | `PG_DATABASE` | `postgres` | Maintenance DB for cluster-wide queries |
 | `PG_SSLMODE` | `prefer` | libpq SSL mode (`require`, `verify-full`, …) |
+| `PG_SERVER_NAME` / `PG_ENVIRONMENT` / `PG_READ_ONLY` | `Default server` / `other` / `false` | How the `PG_*` server appears in the switcher, its environment tag, and whether it is view-only |
+| `ENCRYPTION_KEY` | – | Encrypts passwords of servers added in the UI. **Set it** to save passwords |
+| `ENCRYPTION_KEY_PREVIOUS` | – | Old key during rotation (decrypt only; passwords are re-encrypted at startup) |
+| `SERVER_MANAGEMENT_ENABLED` | `true` | `false` hides adding/changing servers in the UI |
+| `SERVER_HOST_ALLOWLIST` | – | Host names, `*.suffix` or CIDRs that servers may point to (empty = any) |
+| `MAX_SERVER_PROFILES` / `MAX_OPEN_SERVERS` | `50` / `16` | Limits on configured servers and on servers with open connections |
 | `POOL_MIN_SIZE` / `POOL_MAX_SIZE` | `1` / `5` | Connections per database pool |
 | `POOL_MAX_DATABASES` | `8` | Max databases with an open pool (LRU eviction) |
 | `AUTH_ENABLED` | `true` | Require login to the web UI |
@@ -90,6 +97,22 @@ TEST_PG_HOST=127.0.0.1 TEST_PG_PORT=5432 TEST_PG_USER=postgres TEST_PG_PASSWORD=
 ```
 
 Frontend: `npm run build` runs the TypeScript type-check.
+
+## Managing several servers
+
+The server configured with `PG_*` variables is always there as the **default server**. Admins add more under **Servers**, and everyone switches between the ones they may use with the **server switcher** at the top of the sidebar (also `Alt+S`): it shows each server's environment, read-only state and live health, supports search and keyboard navigation, and remembers your choice.
+
+* **Everything is per server**: users and roles, permissions, activity history, temporary access (which is revoked on the server it was granted on), snapshots and drift checks. Switching starts a clean slate in the browser, so nothing from one server can show up on another.
+* **Safe by default for production**: tag a server *production* and it gets a red banner on every page and an extra confirmation before changes are applied or a role is deleted. Tag it *staging* / *development* for coloured labels.
+* **Read-only servers** (a switch on the server): nobody can change anything on it through the console, whatever their role. This is enforced on the server, not just hidden in the UI, and does not affect administering accounts or the server list.
+* **Visibility**: each server has a minimum role that may see it (everyone / operators / admins only). A server you may not use looks exactly like one that does not exist, and its activity history is hidden from you too. Only admins see host names and connection details.
+* **Passwords** are encrypted with AES-256-GCM using `ENCRYPTION_KEY` and bound to their profile, are write-only (never returned by the API, never in logs or the audit trail, not even to admins), and a saved password is only ever sent to the address it was saved for: changing the host, port or user requires entering it again, so it cannot be redirected to another machine.
+* **Connection safety**: TLS options up to `verify-full` with your own CA certificate, link-local and cloud-metadata addresses are blocked, an optional host allowlist (`SERVER_HOST_ALLOWLIST`), rate-limited connection tests, and a cap on how many servers keep connections open. Servers added in the UI use `verify-full` by default and the form warns when a connection can fall back to plain text.
+* **Test before you save**: *Test connection* reports latency, PostgreSQL version, the account's rights and whether the connection is encrypted, with plain-language hints for common failures.
+* Removing a server only removes it from the console: nothing is changed on PostgreSQL. Its scheduled expiries are cancelled and its snapshots deleted; its activity history stays (admins can still read it under *All servers*).
+* Existing installations upgrade automatically: everything created before this feature belongs to the default server.
+
+Limits: client-certificate authentication is not supported; hosts are checked when saved (DNS can change later); with several workers, a change made on one can take a few seconds to show on another.
 
 ## Accounts, roles and single sign-on
 

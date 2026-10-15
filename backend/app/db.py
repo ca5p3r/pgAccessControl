@@ -16,8 +16,32 @@ import psycopg
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from dataclasses import dataclass, field
+
 from .config import Settings
 from .errors import NotFound
+
+
+@dataclass(frozen=True)
+class ConnectionProfile:
+    """Everything needed to connect to one PostgreSQL server."""
+
+    host: str
+    port: int
+    user: str
+    password: str = field(repr=False)  # never printed or logged
+    database: str = "postgres"  # maintenance database for cluster-wide queries
+    sslmode: str = "prefer"
+    sslrootcert: str | None = None  # path to a CA certificate file
+    connect_timeout: int = 5
+    application_name: str = "pgAccessControl"
+
+    @classmethod
+    def from_settings(cls, s: Settings) -> "ConnectionProfile":
+        return cls(
+            host=s.pg_host, port=s.pg_port, user=s.pg_user, password=s.pg_password, database=s.pg_database,
+            sslmode=s.pg_sslmode, connect_timeout=s.pg_connect_timeout, application_name=s.pg_application_name,
+        )
 
 
 class _Entry:
@@ -29,29 +53,41 @@ class _Entry:
         self.in_flight = 0
 
 
+def build_conninfo(p: ConnectionProfile, dbname: str) -> dict:
+    info = {
+        "host": p.host,
+        "port": p.port,
+        "user": p.user,
+        "password": p.password,
+        "dbname": dbname,
+        "sslmode": p.sslmode,
+        "connect_timeout": p.connect_timeout,
+        "application_name": p.application_name,
+        "row_factory": dict_row,
+    }
+    if p.sslrootcert:
+        info["sslrootcert"] = p.sslrootcert
+    return info
+
+
 class PoolManager:
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
+    def __init__(self, settings: Settings, profile: ConnectionProfile | None = None) -> None:
+        self.settings = settings  # pool sizing
+        self.profile = profile or ConnectionProfile.from_settings(settings)
         self._entries: dict[str, _Entry] = {}
         self._lock = asyncio.Lock()
 
     @property
     def default_database(self) -> str:
-        return self.settings.pg_database
+        return self.profile.database
 
     def _conninfo(self, dbname: str) -> dict:
-        s = self.settings
-        return {
-            "host": s.pg_host,
-            "port": s.pg_port,
-            "user": s.pg_user,
-            "password": s.pg_password,
-            "dbname": dbname,
-            "sslmode": s.pg_sslmode,
-            "connect_timeout": s.pg_connect_timeout,
-            "application_name": s.pg_application_name,
-            "row_factory": dict_row,
-        }
+        return build_conninfo(self.profile, dbname)
+
+    @property
+    def busy(self) -> bool:
+        """True while any query is running on one of this server's pools."""
+        return any(e.in_flight for e in self._entries.values())
 
     def _make_pool(self, dbname: str) -> AsyncConnectionPool:
         s = self.settings

@@ -38,6 +38,7 @@ class Principal:
     username: str
     role: str = "admin"  # viewer < operator < admin
     source: str = "env"  # env | local | oidc | none (authentication disabled)
+    capped: bool = False  # True when the selected server is read-only and the role was lowered to viewer
 
     def can(self, minimum: str) -> bool:
         return RANK[self.role] >= RANK[minimum]
@@ -109,9 +110,18 @@ async def require_auth(request: Request) -> Principal:
     return p
 
 
+async def effective_principal(request: Request) -> Principal:
+    """Who is acting, as adjusted for the selected server (a read-only server caps everyone to viewer).
+    Server-scoped routers set ``request.state.principal`` first; other routes use the plain identity."""
+    p = getattr(request.state, "principal", None)
+    return p if p is not None else await require_auth(request)
+
+
 def require_role(minimum: str):
-    async def dependency(p: Principal = Depends(require_auth)) -> Principal:
+    async def dependency(p: Principal = Depends(effective_principal)) -> Principal:
         if not p.can(minimum):
+            if p.capped:
+                raise HTTPException(403, "This server is read-only in the console, so changes are not allowed here.")
             raise HTTPException(403, f"This needs the {minimum} role; you are signed in as {p.role}.")
         return p
 

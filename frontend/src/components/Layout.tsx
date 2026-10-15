@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, History, Hourglass, KeyRound, LayoutDashboard, LockKeyhole, LogOut, Menu, Moon, ShieldCheck, Sun, UserCog, UserRound, Users } from "lucide-react";
+import { ClipboardList, History, Hourglass, KeyRound, LayoutDashboard, Lock, LockKeyhole, LogOut, Menu, Moon, Server, ShieldCheck, Sun, UserCog, UserRound, Users } from "lucide-react";
 import { api } from "../api/client";
 import type { AuthState } from "../api/types";
-import { useAuth, useCan, useMeta } from "../api/hooks";
+import { useAuth, useIsAdmin, useMeta } from "../api/hooks";
 import { ChangePasswordDialog } from "./ChangePassword";
+import { ServerSwitcher } from "./ServerSwitcher";
+import { EnvBadge, useServerContext } from "./server";
 import { Avatar, cx } from "./ui";
 
 const NAV = [
@@ -17,6 +18,7 @@ const NAV = [
   { to: "/temporary", label: "Temporary access", icon: Hourglass },
   { to: "/activity", label: "Activity", icon: History },
   { to: "/accounts", label: "Accounts", icon: UserCog, admin: true },
+  { to: "/servers", label: "Servers", icon: Server, admin: true },
 ];
 
 function useTheme() {
@@ -33,9 +35,9 @@ export function Layout() {
   const [open, setOpen] = useState(false);
   const auth = useAuth();
   const meta = useMeta();
-  const { can } = useCan();
+  const isAdmin = useIsAdmin();
+  const { current, outerClient } = useServerContext();
   const [changingPw, setChangingPw] = useState(false);
-  const qc = useQueryClient();
   const navigate = useNavigate();
 
   const logout = async () => {
@@ -47,8 +49,9 @@ export function Layout() {
     // Drop everything cached for this user, but keep the auth entry and mark it signed out so the app
     // switches to the login screen at once. (qc.clear() would also delete the auth entry, leaving the
     // mounted UI with stale "signed in" data and nothing to refetch.)
-    qc.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
-    qc.setQueryData<AuthState>(["auth"], (prev) => prev && { ...prev, authenticated: false, username: null, role: undefined, source: undefined });
+    // The login gate reads the cache above the per-server ones, so that is the one to update.
+    outerClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "auth" });
+    outerClient.setQueryData<AuthState>(["auth"], (prev) => prev && { ...prev, authenticated: false, username: null, role: undefined, source: undefined });
     navigate("/", { replace: true });
   };
 
@@ -62,8 +65,9 @@ export function Layout() {
             <div className="brand-sub">PostgreSQL permissions</div>
           </div>
         </div>
+        <ServerSwitcher onNavigate={() => setOpen(false)} />
         <nav className="nav" onClick={() => setOpen(false)}>
-          {NAV.filter((n) => !n.admin || can("admin")).map(({ to, label, icon: Icon, end }) => (
+          {NAV.filter((n) => !n.admin || isAdmin).map(({ to, label, icon: Icon, end }) => (
             <NavLink key={to} to={to} end={end} className={({ isActive }) => cx("nav-item", isActive && "active")}>
               <Icon size={18} />
               {label}
@@ -72,7 +76,7 @@ export function Layout() {
         </nav>
         <div className="sidebar-foot">
           {meta.data && (
-            <div className="server-card" title={`${meta.data.host}:${meta.data.port}`}>
+            <div className="server-card" title={meta.data.host ? `${meta.data.host}:${meta.data.port}` : current.name}>
               <span className="dot" />
               <div>
                 <div className="server-line">PostgreSQL {meta.data.server_version.split(" ")[0]}</div>
@@ -106,6 +110,21 @@ export function Layout() {
           <button className="icon-btn" onClick={() => setOpen(true)} aria-label="Open menu"><Menu size={20} /></button>
           <span className="brand-name">pgAccessControl</span>
         </header>
+        {(current.environment === "production" || current.read_only) && (
+          <div className={`server-banner ${current.environment === "production" ? "prod" : "ro"}`} role="status">
+            {current.environment === "production" && <><EnvBadge env="production" compact /> <strong>{current.name}</strong></>}
+            {current.environment !== "production" && <><Lock size={14} /> <strong>{current.name}</strong></>}
+            <span>{current.environment === "production" ? "You are working on a production server." : ""}{current.read_only ? " Read-only: changes are disabled on this server." : ""}</span>
+          </div>
+        )}
+        {meta.error && (
+          <div className="page unreachable">
+            <div className="notice notice-danger" role="alert">
+              <div className="grow"><strong>{current.name} is not reachable.</strong> {(meta.error as Error).message}</div>
+              <button className="btn btn-secondary btn-sm" onClick={() => meta.refetch()}>Retry</button>
+            </div>
+          </div>
+        )}
         <main className="content">
           <Outlet />
         </main>

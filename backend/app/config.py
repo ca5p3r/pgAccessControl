@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     admin_username: str = "admin"
     admin_password: str = ""
     secret_key: str = ""
+    secret_key_generated: bool = False  # internal: True when SECRET_KEY was not provided
     session_ttl_minutes: int = 480
     cookie_secure: bool = False  # set true when served over HTTPS
 
@@ -66,6 +67,17 @@ class Settings(BaseSettings):
     audit_db_path: str = "data/audit.db"
     audit_retention_days: int = 365  # 0 keeps everything
 
+    # --- Managing several PostgreSQL servers ---------------------------------
+    server_management_enabled: bool = True  # false: profiles are fixed, only the environment server is used
+    encryption_key: str = ""  # encrypts saved server passwords; falls back to SECRET_KEY (see crypto.py)
+    encryption_key_previous: str = ""  # old key, decrypt-only, for rotation
+    server_host_allowlist: str = ""  # comma separated hostnames, *.suffix patterns or CIDRs; empty = any host
+    max_server_profiles: int = 50
+    max_open_servers: int = 16  # servers with open connection pools at once (least recently used are closed)
+    pg_server_name: str = "Default server"  # how the environment-configured server is shown in the UI
+    pg_environment: str = "other"  # production | staging | development | other
+    pg_read_only: bool = False  # make the environment server view-only in the console
+
     # --- HTTP server --------------------------------------------------------
     host: str = "0.0.0.0"
     port: int = 8000
@@ -85,8 +97,11 @@ class Settings(BaseSettings):
             raise ValueError("LOCAL_LOGIN_ENABLED=false needs SSO: set OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET")
         if self.oidc_default_role and self.oidc_default_role not in ("viewer", "operator", "admin"):
             raise ValueError("OIDC_DEFAULT_ROLE must be viewer, operator, admin or empty")
+        if self.pg_environment not in ("production", "staging", "development", "other"):
+            raise ValueError("PG_ENVIRONMENT must be production, staging, development or other")
         if not self.secret_key:
             self.secret_key = secrets.token_urlsafe(48)
+            self.secret_key_generated = True
             if self.auth_enabled:
                 log.warning(
                     "SECRET_KEY is not set: using a random key. Sessions will be invalidated on "

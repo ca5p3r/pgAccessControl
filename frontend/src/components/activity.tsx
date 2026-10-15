@@ -38,6 +38,10 @@ const ACTIONS: Record<string, { label: string; tone: "success" | "primary" | "da
   "account.update": { label: "Account", tone: "primary" },
   "account.delete": { label: "Account", tone: "danger" },
   "account.password": { label: "Password", tone: "neutral" },
+  "server.create": { label: "Server added", tone: "success" },
+  "server.update": { label: "Server changed", tone: "primary" },
+  "server.delete": { label: "Server removed", tone: "danger" },
+  "server.test": { label: "Connection test", tone: "neutral" },
 };
 
 export const ActionBadge = ({ action }: { action: string }) => {
@@ -66,6 +70,7 @@ function Details({ e }: { e: AuditEntry }) {
         <div><dt>Time</dt><dd>{new Date(e.ts).toLocaleString()} <span className="muted">({e.ts.slice(0, 19).replace("T", " ")} UTC)</span></dd></div>
         <div><dt>Who</dt><dd>{e.actor}{e.ip ? <span className="muted"> from {e.ip}</span> : null}</dd></div>
         {e.target && <div><dt>Target</dt><dd className="mono">{e.target}</dd></div>}
+        {e.server_name && <div><dt>Server</dt><dd>{e.server_name}</dd></div>}
         {e.database && <div><dt>Database</dt><dd className="mono">{e.database}</dd></div>}
       </dl>
       {e.error && <Notice tone="danger"><strong>Error:</strong> {e.error}</Notice>}
@@ -95,7 +100,7 @@ function Details({ e }: { e: AuditEntry }) {
   );
 }
 
-export function ActivityTable({ filters, page, onPage, size = 25, live = false }: { filters: AuditFilters; page: number; onPage: (p: number) => void; size?: number; live?: boolean }) {
+export function ActivityTable({ filters, page, onPage, size = 25, live = false, showServer = false }: { filters: AuditFilters; page: number; onPage: (p: number) => void; size?: number; live?: boolean; showServer?: boolean }) {
   const { data, error, isLoading, isFetching, refetch } = useAudit(filters, page, size, live);
   const [open, setOpen] = useState<number | null>(null);
 
@@ -109,7 +114,7 @@ export function ActivityTable({ filters, page, onPage, size = 25, live = false }
     <div className={cx("card flush", isFetching && !live && "fetching")}>
       <table className="table audit">
         <thead>
-          <tr><th>When</th><th>Who</th><th>Action</th><th>Summary</th><th /></tr>
+          <tr><th>When</th><th>Who</th>{showServer && <th>Server</th>}<th>Action</th><th>Summary</th><th /></tr>
         </thead>
         <tbody>
           {data!.items.map((e) => (
@@ -117,11 +122,12 @@ export function ActivityTable({ filters, page, onPage, size = 25, live = false }
               <tr className={cx("audit-row", open === e.id && "open", e.status === "failed" && "failed")} onClick={() => setOpen(open === e.id ? null : e.id)}>
                 <td className="nowrap" title={new Date(e.ts).toLocaleString()}>{timeAgo(e.ts)}</td>
                 <td><span className="who"><Avatar name={e.actor} size={22} />{e.actor}</span></td>
+                {showServer && <td className="nowrap">{e.server_name ?? <span className="muted">—</span>}</td>}
                 <td><ActionBadge action={e.action} /></td>
                 <td className={cx(e.status === "failed" && "danger-text")}>{e.summary}</td>
                 <td className="chev"><ChevronRight size={16} className={cx(open === e.id && "rot")} /></td>
               </tr>
-              {open === e.id && <tr className="audit-expanded"><td colSpan={5}><Details e={e} /></td></tr>}
+              {open === e.id && <tr className="audit-expanded"><td colSpan={showServer ? 6 : 5}><Details e={e} /></td></tr>}
             </Fragment>
           ))}
         </tbody>

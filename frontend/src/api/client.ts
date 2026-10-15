@@ -12,6 +12,19 @@ export const UNAUTHORIZED_EVENT = "pgac:unauthorized";
 
 type Params = Record<string, string | number | boolean | null | undefined>;
 
+/* The server the UI is currently working with. It is sent with every request (the backend re-validates it each
+   time) except for calls that are not about a server: sign-in, the server list itself and console accounts. */
+let currentServer: { id: string; readOnly: boolean } | null = null;
+export const setCurrentServer = (s: { id: string; readOnly: boolean } | null) => { currentServer = s; };
+export const getCurrentServer = () => currentServer;
+const UNSCOPED = ["/auth", "/servers", "/app-users"];
+
+function withServer(path: string): string {
+  if (!currentServer || UNSCOPED.some((p) => path === p || path.startsWith(p + "/") || path.startsWith(p + "?"))) return path;
+  if (/[?&]server=/.test(path)) return path; // already explicit (e.g. the Activity page asking for all servers)
+  return `${path}${path.includes("?") ? "&" : "?"}server=${encodeURIComponent(currentServer.id)}`;
+}
+
 export function qs(params?: Params): string {
   if (!params) return "";
   const sp = new URLSearchParams();
@@ -26,7 +39,7 @@ export function qs(params?: Params): string {
 async function request<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`/api${path}`, {
+    res = await fetch(`/api${withServer(path)}`, {
       method,
       credentials: "same-origin",
       headers: body !== undefined ? { "Content-Type": "application/json" } : undefined,

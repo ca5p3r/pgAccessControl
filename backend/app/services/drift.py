@@ -225,15 +225,19 @@ def remediation(conn: psycopg.AsyncConnection, diff: dict[str, Any], database: s
 # Storage
 # ---------------------------------------------------------------------------
 def _meta(r: sqlite3.Row) -> dict[str, Any]:
-    d = {k: r[k] for k in ("id", "name", "note", "database", "created_at", "created_by")}
+    d = {k: r[k] for k in ("id", "server_id", "name", "note", "database", "created_at", "created_by")}
     d["baseline"] = bool(r["baseline"])
     d["counts"] = json.loads(r["counts"])
     d["last_check"] = json.loads(r["last_check"]) if r["last_check"] else None
     return d
 
 
-def db_list(c: sqlite3.Connection) -> list[dict[str, Any]]:
-    return [_meta(r) for r in c.execute("SELECT * FROM snapshots ORDER BY created_at DESC, id DESC")]
+def db_list(c: sqlite3.Connection, server_id: str | None = None) -> list[dict[str, Any]]:
+    if server_id:
+        rows = c.execute("SELECT * FROM snapshots WHERE server_id = ? ORDER BY created_at DESC, id DESC", (server_id,))
+    else:
+        rows = c.execute("SELECT * FROM snapshots ORDER BY created_at DESC, id DESC")
+    return [_meta(r) for r in rows]
 
 
 def db_get(c: sqlite3.Connection, snapshot_id: int) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -241,12 +245,12 @@ def db_get(c: sqlite3.Connection, snapshot_id: int) -> tuple[dict[str, Any], dic
     return (_meta(r), unpack(r["data"])) if r else None
 
 
-def db_insert(c: sqlite3.Connection, name: str, note: str | None, database: str, created_by: str, baseline: bool, data: dict[str, Any]) -> int:
+def db_insert(c: sqlite3.Connection, server_id: str, name: str, note: str | None, database: str, created_by: str, baseline: bool, data: dict[str, Any]) -> int:
     if baseline:
-        c.execute("UPDATE snapshots SET baseline = 0 WHERE database = ?", (database,))
+        c.execute("UPDATE snapshots SET baseline = 0 WHERE server_id = ? AND database = ?", (server_id, database))
     cur = c.execute(
-        "INSERT INTO snapshots (name, note, database, created_at, created_by, baseline, counts, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (name, note, database, expiring.iso(expiring.now()), created_by, int(baseline), json.dumps(counts(data)), pack(data)),
+        "INSERT INTO snapshots (server_id, name, note, database, created_at, created_by, baseline, counts, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (server_id, name, note, database, expiring.iso(expiring.now()), created_by, int(baseline), json.dumps(counts(data)), pack(data)),
     )
     return int(cur.lastrowid)
 
@@ -256,11 +260,11 @@ def db_delete(c: sqlite3.Connection, snapshot_id: int) -> bool:
 
 
 def db_set_baseline(c: sqlite3.Connection, snapshot_id: int, baseline: bool) -> bool:
-    r = c.execute("SELECT database FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+    r = c.execute("SELECT database, server_id FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
     if r is None:
         return False
     if baseline:
-        c.execute("UPDATE snapshots SET baseline = 0 WHERE database = ?", (r["database"],))
+        c.execute("UPDATE snapshots SET baseline = 0 WHERE server_id = ? AND database = ?", (r["server_id"], r["database"]))
     c.execute("UPDATE snapshots SET baseline = ?, last_check = NULL WHERE id = ?", (int(baseline), snapshot_id))
     return True
 
@@ -284,22 +288,26 @@ async def check_baselines(app: Any) -> int:
     snaps = [s for s in await app.state.store.run(db_list) if s["baseline"]]
     reported = 0
     for meta in snaps:
+        profile = await app.state.servers.get(meta["server_id"])
+        if profile is None or profile.disabled:
+            continue
         try:
             _, old = await load(app, meta["id"])
-            async with app.state.pools.connection(meta["database"]) as conn:
+            pools = await app.state.servers.manager(profile)
+            async with pools.connection(meta["database"]) as conn:
                 live = await capture(conn)
             diff = compare(old, live)
-        except Exception:  # noqa: BLE001 - an unreachable database must not stop the other checks
+        except Exception:  # noqa: BLE001 - an unreachable server or database must not stop the other checks
             continue
         last = meta["last_check"] or {}
         if diff["total"] and last.get("digest") != diff["digest"]:
-            async with audited_system(app.state.audit, "drift.detected", target=meta["name"], target_type="snapshot", database=meta["database"]) as a:
+            async with audited_system(app.state.audit, "drift.detected", target=meta["name"], target_type="snapshot", database=meta["database"], server=profile) as a:
                 s = diff["summary"]
                 a.summary = f"{diff['total']} difference{'' if diff['total'] == 1 else 's'} from baseline “{meta['name']}” in {meta['database']}"
                 a.details = {"snapshot_id": meta["id"], "summary": s}
             reported += 1
         elif not diff["total"] and last.get("total"):
-            async with audited_system(app.state.audit, "drift.cleared", target=meta["name"], target_type="snapshot", database=meta["database"]) as a:
+            async with audited_system(app.state.audit, "drift.cleared", target=meta["name"], target_type="snapshot", database=meta["database"], server=profile) as a:
                 a.summary = f"Permissions match baseline “{meta['name']}” again in {meta['database']}"
         await app.state.store.run(db_set_last_check, meta["id"], {"at": expiring.iso(expiring.now()), "total": diff["total"], "digest": diff["digest"]})
     return reported

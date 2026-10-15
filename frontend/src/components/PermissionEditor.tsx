@@ -5,6 +5,8 @@ import { RolePicker } from "./roles";
 import { useApplyPermissions, useCan, useColumnPrivileges, useDatabases, useDefaultPrivileges, useMeta, usePermObjects, useSchemas } from "../api/hooks";
 import type { ChangeObjectType, ObjType, PermObject, PermissionChange, TemporaryPlan } from "../api/types";
 import { ExpiryPicker, toLocalInput } from "./expiry";
+import { ProductionConfirm } from "./ProductionConfirm";
+import { useServerContext } from "./server";
 import { Badge, Button, Empty, ErrorNote, IconButton, Modal, Notice, Pagination, SearchInput, Spinner, Tabs, Switch, cx, useDebounced, useToast } from "./ui";
 
 type TabId = ObjType | "defaults";
@@ -123,6 +125,7 @@ export function PermissionEditor({ role }: { role: string }) {
   const [mode, setMode] = useState<"priv" | "option">("priv");
   const [columnsFor, setColumnsFor] = useState<PermObject | null>(null);
   const { can } = useCan();
+  const { current } = useServerContext();
   const ro = !can("operator");
   const schemas = useSchemas(database);
 
@@ -207,7 +210,7 @@ export function PermissionEditor({ role }: { role: string }) {
         <Button size="sm" variant="ghost" icon={<Download size={14} />} onClick={() => nav(`/reports?tab=export&role=${encodeURIComponent(role)}`)} title="Export this principal's permissions as SQL, CSV or JSON">Export</Button>
       </div>
 
-      {ro && <Notice tone="info">You are signed in as a <strong>viewer</strong>: permissions are shown read-only.</Notice>}
+      {ro && <Notice tone="info">{current.read_only ? <><strong>{current.name}</strong> is read-only in this console: permissions are shown but cannot be changed here.</> : <>You are signed in as a <strong>viewer</strong>: permissions are shown read-only.</>}</Notice>}
       {perms.data?.role_superuser && (
         <Notice tone="warn">
           <strong>{role} is a superuser</strong> and bypasses all permission checks. Grants shown here have no effect while the superuser attribute is set.
@@ -412,6 +415,7 @@ function ReviewDialog({ role, database, changes, onClose, onApplied }: { role: s
   const [grantor, setGrantor] = useState<string[]>([]);
   const [cascade, setCascade] = useState(false);
   const [temp, setTemp] = useState(false);
+  const [prodOk, setProdOk] = useState(true);
   const [when, setWhen] = useState(toLocalInput(new Date(Date.now() + 24 * 3_600_000)));
   const { mutate: dry } = apply;
   const hasRevoke = changes.some((c) => c.action === "revoke");
@@ -440,13 +444,14 @@ function ReviewDialog({ role, database, changes, onClose, onApplied }: { role: s
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!preview} loading={apply.isPending && !apply.variables?.dry_run}
+          <Button variant="primary" disabled={!preview || !prodOk} loading={apply.isPending && !apply.variables?.dry_run}
             onClick={() => apply.mutate({ database, changes: finalChanges, grantor: grantor[0], expires_at }, { onSuccess: (r) => onApplied(r.statements.filter((x) => !x.startsWith("SET LOCAL ROLE")).length, r.temporary?.expires_at) })}>
             Apply {preview ? shown : ""} statement{shown === 1 ? "" : "s"}{expires_at ? " (temporary)" : ""}
           </Button>
         </>
       }
     >
+      <ProductionConfirm onChange={setProdOk} />
       {error && <ErrorNote error={error} />}
       {needsCascade && <Notice tone="warn">Other roles received these privileges from the one you are changing. Open “Advanced” and tick <strong>cascade</strong> to remove those as well.</Notice>}
       {!preview && !error ? (

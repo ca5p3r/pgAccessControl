@@ -11,6 +11,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from .accounts import Accounts
+from .crypto import SecretBox
 from .audit import AuditStore
 from .oidc import OIDCClient
 from .store import AppStore
@@ -18,6 +19,8 @@ from .config import get_settings
 from .db import PoolManager
 from .errors import install_error_handlers
 from .routers import app_users, audit, auth, meta, permissions, reports, roles, snapshots, temporary
+from .routers import servers as servers_router
+from .servers import ServerRegistry, scoped_principal
 from .scheduler import scheduler_loop
 from .security import require_auth
 
@@ -30,9 +33,19 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        app.state.pools = PoolManager(settings)
+        app.state.pools = await app.state.servers.manager(app.state.servers.env)  # the PG_* server
         purge_task = None
         app.state.store.init()
+        box = app.state.servers.box
+        if box is None:
+            log.info("No ENCRYPTION_KEY (and no explicit SECRET_KEY): servers can be added, but only without a saved password.")
+        elif box.from_secret_key:
+            log.warning("ENCRYPTION_KEY is not set: saved server passwords are encrypted with a key derived from SECRET_KEY. "
+                        "Set a dedicated ENCRYPTION_KEY so rotating SECRET_KEY does not lock you out of them.")
+        try:
+            await app.state.servers.reencrypt()
+        except Exception as exc:  # noqa: BLE001
+            log.error("Could not re-encrypt saved server passwords: %s", exc)
         try:
             app.state.audit.init()
             purge_task = asyncio.create_task(app.state.audit.purge_loop())
@@ -49,7 +62,7 @@ def create_app() -> FastAPI:
         sched_task.cancel()
         if purge_task:
             purge_task.cancel()
-        await app.state.pools.close()
+        await app.state.servers.close()
 
     app = FastAPI(
         title="pgAccessControl",
@@ -62,6 +75,7 @@ def create_app() -> FastAPI:
     app.state.audit = AuditStore(settings)
     app.state.store = AppStore(settings.data_db_path)
     app.state.accounts = Accounts(app.state.store, settings.admin_username)
+    app.state.servers = ServerRegistry(settings, app.state.store, SecretBox.from_settings(settings))
     app.state.oidc = OIDCClient(settings) if settings.oidc_enabled else None
     install_error_handlers(app)
     app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -83,13 +97,17 @@ def create_app() -> FastAPI:
 
     api.include_router(auth.router)
     protected = [Depends(require_auth)]
-    api.include_router(meta.router, dependencies=protected)
-    api.include_router(roles.router, dependencies=protected)
-    api.include_router(permissions.router, dependencies=protected)
-    api.include_router(reports.router, dependencies=protected)
-    api.include_router(audit.router, dependencies=protected)
-    api.include_router(temporary.router, dependencies=protected)
-    api.include_router(snapshots.router, dependencies=protected)
+    # Everything that talks to a PostgreSQL server is scoped to the selected one: the dependency validates the
+    # choice, hides servers the user may not see and caps read-only servers to viewer.
+    scoped = [Depends(scoped_principal)]
+    api.include_router(meta.router, dependencies=scoped)
+    api.include_router(roles.router, dependencies=scoped)
+    api.include_router(permissions.router, dependencies=scoped)
+    api.include_router(reports.router, dependencies=scoped)
+    api.include_router(temporary.router, dependencies=scoped)
+    api.include_router(snapshots.router, dependencies=scoped)
+    api.include_router(audit.router, dependencies=protected)  # filters by the servers you may see itself
+    api.include_router(servers_router.router, dependencies=protected)
     api.include_router(app_users.router)  # admin-only; checks its own dependency
 
     @api.api_route("/{rest:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)

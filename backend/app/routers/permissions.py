@@ -99,7 +99,7 @@ async def apply(
             temporary = {"expires_at": expiring.iso(when), "expiring": plan["expiring"], "skipped": plan["skipped"], "schedule_id": None}
             if plan["revokes"]:
                 temporary["schedule_id"] = await request.app.state.store.run(
-                    expiring.db_insert, "grant", role, body.database, "; ".join(plan["expiring"]),
+                    expiring.db_insert, request.state.server.id, "grant", role, body.database, "; ".join(plan["expiring"]),
                     {"changes": plan["revokes"]}, me.username, expiring.iso(when),
                 )
             a.details["temporary"] = temporary

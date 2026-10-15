@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { UNAUTHORIZED_EVENT } from "./api/client";
 import { useAuth } from "./api/hooks";
 import { Layout } from "./components/Layout";
+import { ServerProvider, ServerScope } from "./components/server";
 import { ErrorNote, Spinner } from "./components/ui";
 import { AccountsPage } from "./pages/AccountsPage";
 import { ActivityPage } from "./pages/ActivityPage";
@@ -11,6 +12,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
 import { PermissionsPage } from "./pages/PermissionsPage";
 import { ReportsPage } from "./pages/ReportsPage";
+import { ServersPage } from "./pages/ServersPage";
 import { RoleDetail } from "./pages/RoleDetail";
 import { RolesPage } from "./pages/RolesPage";
 import { TemporaryPage } from "./pages/TemporaryPage";
@@ -31,7 +33,9 @@ export default function App() {
   if (auth.data?.auth_enabled && !auth.data.authenticated) return <Login />;
 
   return (
-    <Routes>
+    <ServerProvider>
+      <ServerScope>
+        <Routes>
       <Route element={<Layout />}>
         <Route index element={<Dashboard />} />
         <Route path="users" element={<RolesPage key="users" kind="user" />} />
@@ -44,8 +48,11 @@ export default function App() {
         <Route path="activity" element={<ActivityPage />} />
         <Route path="temporary" element={<TemporaryPage />} />
         <Route path="accounts" element={<AccountsPage />} />
+        <Route path="servers" element={<ServersPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
-    </Routes>
+        </Routes>
+      </ServerScope>
+    </ServerProvider>
   );
 }

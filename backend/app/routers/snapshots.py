@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from ..audit import audited
 from ..db import PoolManager
 from ..deps import get_pools
-from ..errors import AppError
+from ..errors import AppError, NotFound
 from ..security import Principal, require_operator
 from ..services import drift
 
@@ -28,9 +28,17 @@ class SnapshotCreate(BaseModel):
     baseline: bool = False  # the reference the scheduled drift check compares against
 
 
+async def _load(request: Request, snapshot_id: int):
+    """Load a snapshot, but only if it belongs to the selected server (otherwise it does not exist)."""
+    meta, data = await drift.load(request.app, snapshot_id)
+    if meta["server_id"] != request.state.server.id:
+        raise NotFound(f"Snapshot {snapshot_id} does not exist")
+    return meta, data
+
+
 @router.get("")
 async def list_snapshots(request: Request) -> dict:
-    return {"items": await request.app.state.store.run(drift.db_list), "check_interval_minutes": _interval(request)}
+    return {"items": await request.app.state.store.run(drift.db_list, request.state.server.id), "check_interval_minutes": _interval(request)}
 
 
 def _interval(request: Request) -> int:
@@ -50,17 +58,17 @@ async def create_snapshot(
         a.details = {"counts": drift.counts(data)}
         try:
             sid = await request.app.state.store.run(
-                drift.db_insert, body.name.strip(), body.note, body.database, me.username, body.baseline, data
+                drift.db_insert, request.state.server.id, body.name.strip(), body.note, body.database, me.username, body.baseline, data
             )
         except sqlite3.IntegrityError:
             raise AppError(f"A snapshot named “{body.name}” already exists for {body.database}.", 409) from None
-    meta, _ = await drift.load(request.app, sid)
+    meta, _ = await _load(request, sid)
     return meta
 
 
 @router.delete("/{snapshot_id}", status_code=204)
 async def delete_snapshot(snapshot_id: int, request: Request, me: Principal = Depends(require_operator)) -> None:
-    meta, _ = await drift.load(request.app, snapshot_id)
+    meta, _ = await _load(request, snapshot_id)
     async with audited(request, me.username, "snapshot.delete", target=meta["name"], target_type="snapshot", database=meta["database"]) as a:
         a.summary = f"Deleted snapshot “{meta['name']}”"
         await request.app.state.store.run(drift.db_delete, snapshot_id)
@@ -72,16 +80,16 @@ class BaselineBody(BaseModel):
 
 @router.post("/{snapshot_id}/baseline")
 async def set_baseline(snapshot_id: int, body: BaselineBody, request: Request, me: Principal = Depends(require_operator)) -> dict:
-    meta, _ = await drift.load(request.app, snapshot_id)
+    meta, _ = await _load(request, snapshot_id)
     async with audited(request, me.username, "snapshot.baseline", target=meta["name"], target_type="snapshot", database=meta["database"]) as a:
         a.summary = f"{'Marked' if body.baseline else 'Unmarked'} snapshot “{meta['name']}” as the baseline for {meta['database']}"
         await request.app.state.store.run(drift.db_set_baseline, snapshot_id, body.baseline)
-    return (await drift.load(request.app, snapshot_id))[0]
+    return (await _load(request, snapshot_id))[0]
 
 
 @router.get("/{snapshot_id}/download")
 async def download(snapshot_id: int, request: Request) -> Response:
-    meta, data = await drift.load(request.app, snapshot_id)
+    meta, data = await _load(request, snapshot_id)
     safe = re.sub(r"[^A-Za-z0-9._-]+", "_", meta["name"]).strip("_") or "snapshot"
     return Response(
         json.dumps({"snapshot": meta, "data": data}, indent=2, default=str),
@@ -91,9 +99,9 @@ async def download(snapshot_id: int, request: Request) -> Response:
 
 
 async def _diff(request: Request, pools: PoolManager, snapshot_id: int, against: int | None):
-    meta, old = await drift.load(request.app, snapshot_id)
+    meta, old = await _load(request, snapshot_id)
     if against is not None:
-        other, new = await drift.load(request.app, against)
+        other, new = await _load(request, against)
         target = {"kind": "snapshot", "id": other["id"], "name": other["name"], "at": other["created_at"]}
     else:
         async with pools.connection(meta["database"]) as conn:

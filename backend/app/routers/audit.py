@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from ..audit import EXPORT_LIMIT, AuditStore
 from ..csvutil import to_csv
+from ..security import Principal, require_auth
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -19,17 +20,31 @@ def _store(request: Request) -> AuditStore:
     return request.app.state.audit
 
 
-def _filters(
+async def _filters(
+    request: Request,
+    me: Principal = Depends(require_auth),
     actor: str | None = None,
     action: str | None = Query(None, description='Prefix match: "role." or "permission.apply"'),
     target: str | None = None,
     database: str | None = None,
+    server: str | None = Query(None, description='Server id, or "*" for every server you may see'),
     status: Literal["success", "failed"] | None = None,
     q: str | None = Query(None, max_length=200),
     date_from: str | None = Query(None, pattern=_DATE),
     date_to: str | None = Query(None, pattern=_DATE),
 ) -> dict[str, Any]:
-    return {k: v for k, v in locals().items() if v}
+    f: dict[str, Any] = {
+        k: v for k, v in dict(actor=actor, action=action, target=target, database=database, status=status, q=q,
+                              date_from=date_from, date_to=date_to).items() if v
+    }
+    # Only servers this user may see: the audit trail of a hidden server is as hidden as the server itself.
+    allowed = [p.id for p in await request.app.state.servers.all() if me.can(p.min_role) and (not p.disabled or me.can("admin"))]
+    if server and server != "*":
+        # Admins may look at any server's history, including servers that have since been removed.
+        f["server"] = server if (server in allowed or me.can("admin")) else "\0none"  # matches nothing
+    elif not me.can("admin"):
+        f["servers_in"] = allowed
+    return f
 
 
 @router.get("")
@@ -45,8 +60,11 @@ async def list_audit(
 
 
 @router.get("/facets")
-async def facets(request: Request) -> dict:
-    return await _store(request).facets()
+async def facets(request: Request, me: Principal = Depends(require_auth)) -> dict:
+    data = await _store(request).facets()
+    visible = {p.id for p in await request.app.state.servers.all() if me.can(p.min_role)}
+    data["servers"] = [s for s in data["servers"] if s["id"] in visible]
+    return data
 
 
 @router.get("/export")
