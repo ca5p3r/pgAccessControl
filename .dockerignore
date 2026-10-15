@@ -11,3 +11,6 @@
 !.env.example
 backend/tests
 backend/.env
+# Runtime data (SQLite files with accounts, encrypted server passwords, history): never part of an image
+data
+**/data

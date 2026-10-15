@@ -65,7 +65,7 @@ To administer an existing server, set `PG_HOST` (use `host.docker.internal` for 
 | `SCHEDULER_INTERVAL_SECONDS` | `30` | How often temporary access is checked |
 | `DRIFT_CHECK_INTERVAL_MINUTES` | `0` (off) | Scheduled comparison of baseline snapshots with the live server |
 | `AUDIT_ENABLED` | `true` | Store audit history (SQLite) |
-| `AUDIT_DB_PATH` | `data/audit.db` (`/data/audit.db` in Docker) | Where history is stored; Docker mounts the `appdata` volume at `/data` |
+| `AUDIT_DB_PATH` | `data/audit.db` (`/data/audit.db` in Docker) | Where history is stored; Docker bind-mounts `./data` (next to `docker-compose.yml`) at `/data` |
 | `AUDIT_RETENTION_DAYS` | `365` | Older entries are deleted daily; `0` keeps everything |
 | `WORKERS`, `LOG_LEVEL`, `HOST`, `PORT` | `1`, `info`, `0.0.0.0`, `8000` | Server |
 | `CORS_ORIGINS` | – | Only if the UI is served from another origin |
