@@ -1,14 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Camera, Check, Database, Download, FileCode2, FileJson, FileSpreadsheet, FolderTree, Hash, Search, ShieldQuestion, SquareFunction, Table2 } from "lucide-react";
-import { downloadUrl, useAccessReport, useDatabases, useMeta, useObjects } from "../api/hooks";
+import { downloadUrl, useAccessReport, useDatabaseChoice, useObjects } from "../api/hooks";
 import type { AccessPrincipal, ObjType, ObjectItem } from "../api/types";
 import { Avatar, Badge, Button, Empty, ErrorNote, Notice, SearchInput, Spinner, Tabs, cx, useDebounced } from "../components/ui";
 import { RolePicker } from "../components/roles";
 import { SnapshotsTab } from "../components/SnapshotsTab";
-
-const DB_KEY = "pgac-database";
-const savedDb = () => { try { return localStorage.getItem(DB_KEY); } catch { return null; } };
 
 const TYPES: { id: ObjType; label: string; icon: JSX.Element }[] = [
   { id: "table", label: "Table / view", icon: <Table2 size={15} /> },
@@ -24,19 +21,6 @@ const csvCell = (v: unknown) => {
   if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 };
-
-function useDatabaseChoice() {
-  const dbs = useDatabases();
-  const meta = useMeta();
-  const [database, setDatabase] = useState<string>();
-  useEffect(() => {
-    if (database || !dbs.data) return;
-    const ok = dbs.data.filter((d) => d.connectable);
-    const saved = savedDb();
-    setDatabase((ok.find((d) => d.name === saved) ?? ok.find((d) => d.name !== meta.data?.database) ?? ok[0])?.name);
-  }, [dbs.data, meta.data, database]);
-  return { dbs, database, setDatabase };
-}
 
 const objLabel = (o: Pick<ObjectItem, "schema" | "name" | "args">, type: ObjType) =>
   type === "database" || type === "schema" ? o.name : `${o.schema}.${o.name}${o.args ? `(${o.args})` : ""}`;

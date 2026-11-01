@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 RoleName = Field(min_length=1, max_length=63)
 
@@ -191,3 +191,48 @@ class ApplyResult(BaseModel):
     statements: list[str]
     applied: bool
     temporary: dict | None = None  # {expires_at, expiring: [...], skipped: [...], schedule_id}
+
+
+# ---------------------------------------------------------------------------
+# Ownership
+# ---------------------------------------------------------------------------
+OwnedType = Literal["database", "schema", "table", "sequence", "function", "type"]
+
+
+class OwnerItem(BaseModel):
+    object_type: OwnedType
+    oid: int
+
+
+class OwnerFilter(BaseModel):
+    """Selects objects of one type; used to browse and to change "everything that matches" in one go."""
+
+    object_type: OwnedType = "table"
+    schema_name: str | None = Field(None, alias="schema", max_length=200)
+    owner: str | None = Field(None, max_length=200)
+    q: str | None = Field(None, max_length=100)
+    include_system: bool = False
+
+    model_config = {"populate_by_name": True}
+
+
+class OwnerChange(BaseModel):
+    database: str
+    new_owner: str = Field(min_length=1, max_length=200)
+    items: list[OwnerItem] | None = Field(None, min_length=1, max_length=1000)
+    filter: OwnerFilter | None = None  # alternative to items: every object matching it
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def _one_selection(self) -> "OwnerChange":
+        if (self.items is None) == (self.filter is None):
+            raise ValueError("Send either items or filter")
+        return self
+
+
+class OwnerReassign(BaseModel):
+    from_role: str = Field(min_length=1, max_length=200)
+    to_role: str = Field(min_length=1, max_length=200)
+    database: str | None = None  # None: every database where from_role owns something
+    dry_run: bool = False
+

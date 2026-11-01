@@ -10,6 +10,7 @@ import { AccountsPage } from "./pages/AccountsPage";
 import { ActivityPage } from "./pages/ActivityPage";
 import { Dashboard } from "./pages/Dashboard";
 import { Login } from "./pages/Login";
+import { OwnershipPage } from "./pages/OwnershipPage";
 import { PermissionsPage } from "./pages/PermissionsPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { ServersPage } from "./pages/ServersPage";
@@ -44,6 +45,7 @@ export default function App() {
         <Route path="roles/:name" element={<RoleDetail />} />
         <Route path="permissions" element={<PermissionsPage />} />
         <Route path="permissions/:name" element={<PermissionsPage />} />
+        <Route path="ownership" element={<OwnershipPage />} />
         <Route path="reports" element={<ReportsPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="temporary" element={<TemporaryPage />} />

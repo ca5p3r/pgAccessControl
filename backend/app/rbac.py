@@ -65,3 +65,19 @@ async def ensure_role_editable(conn: psycopg.AsyncConnection, me: Principal, nam
         return
     if await is_privileged(conn, name):
         raise deny(f'modify the privileged role "{name}"')
+
+
+async def ensure_ownership_change(
+    conn: psycopg.AsyncConnection, me: Principal, new_owner: str, objects: list[dict]
+) -> None:
+    """Ownership is the strongest right on an object. Operators may hand over tables, sequences, functions and
+    types between ordinary roles; databases, schemas and anything involving a privileged role are admin-only."""
+    if me.can("admin"):
+        return
+    if any(o["type"] in ("database", "schema") for o in objects):
+        raise deny("change the owner of databases and schemas")
+    involved = {new_owner} | {o["owner"] for o in objects}
+    for r in sorted(involved):
+        if await is_privileged(conn, r):
+            raise deny(f'hand over ownership to or from the privileged role "{r}"')
+

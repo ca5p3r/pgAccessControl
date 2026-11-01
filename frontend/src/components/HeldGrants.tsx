@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { useSearchParams } from "react-router-dom";
-import { Boxes, Database, Globe, KeyRound, Pencil } from "lucide-react";
+import { Link, useSearchParams } from "react-router-dom";
+import { Boxes, Crown, Database, Globe, KeyRound, Pencil } from "lucide-react";
 import { useHoldingsDetail, useHoldingsSummary } from "../api/hooks";
 import type { HeldObject, HoldingsDetail, HoldingsSummary, RoleDetail } from "../api/types";
 import { Badge, Button, Empty, ErrorNote, Notice, SearchInput, Spinner, cx } from "./ui";
@@ -40,10 +40,11 @@ const PrivBadges = ({ privs }: { privs: Map<string, boolean> }) => (
   </span>
 );
 
-function OwnedList({ items, deleteHint }: { items: HeldObject[]; deleteHint?: boolean }) {
+function OwnedList({ items, deleteHint, manage }: { items: HeldObject[]; deleteHint?: boolean; manage: string }) {
   if (!items.length) return <p className="muted pad-p">Owns nothing here.</p>;
   return (
     <>
+      <div className="pad-p"><Link className="btn btn-secondary btn-sm" to={manage}><Crown size={14} /> Change owners in Ownership</Link></div>
       {deleteHint && <div className="pad-p"><Notice tone="warn">Owned objects must be transferred to another role before this role can be deleted (the delete dialog asks for the new owner). They are never dropped.</Notice></div>}
       <table className="table"><thead><tr><th>Type</th><th>Object</th></tr></thead>
         <tbody>{items.map((o, i) => <tr key={i}><td><Badge>{o.kind}</Badge></td><td className="mono">{o.description.replace(/^[a-z -]+? (?=\S)/, "")}</td></tr>)}</tbody></table>
@@ -51,7 +52,7 @@ function OwnedList({ items, deleteHint }: { items: HeldObject[]; deleteHint?: bo
   );
 }
 
-function ClusterPane({ cluster: c }: { cluster: HoldingsSummary["cluster"] }) {
+function ClusterPane({ role, cluster: c }: { role: string; cluster: HoldingsSummary["cluster"] }) {
   const grouped = useMemo(() => {
     const m = new Map<string, { kind: string; name: string; privs: Map<string, boolean>; grantors: Set<string> }>();
     for (const p of c.privileges) {
@@ -63,7 +64,7 @@ function ClusterPane({ cluster: c }: { cluster: HoldingsSummary["cluster"] }) {
   return (
     <div className="stack">
       <Notice tone="info">Databases and tablespaces belong to the whole server, not to a single database, so they are listed here.</Notice>
-      <Section title="Owns" count={c.owned.length}><OwnedList items={c.owned} deleteHint={c.owned.length > 0} /></Section>
+      <Section title="Owns" count={c.owned.length}><OwnedList items={c.owned} deleteHint={c.owned.length > 0} manage={`/ownership?type=database&owner=${encodeURIComponent(role)}`} /></Section>
       <Section title="Privileges held on databases and tablespaces" count={grouped.length}>
         {grouped.length === 0 ? <p className="muted pad-p">None.</p> : (
           <table className="table"><thead><tr><th>Object</th><th>Privileges</th><th>Granted by</th></tr></thead>
@@ -94,7 +95,7 @@ function DatabasePane({ role, database }: { role: string; database: string }) {
 
   return (
     <div className="stack">
-      <Section title="Owns" count={d.owned.length}><OwnedList items={d.owned} deleteHint={d.owned.length > 0} /></Section>
+      <Section title="Owns" count={d.owned.length}><OwnedList items={d.owned} deleteHint={d.owned.length > 0} manage={`/ownership?db=${encodeURIComponent(database)}&owner=${encodeURIComponent(role)}`} /></Section>
 
       <Section title="Privileges held" count={privs.length} hint="Granted directly to this role (privileges it only inherits from other roles are on the Permissions tab).">
         {privs.length === 0 ? <p className="muted pad-p">None.</p> : (
@@ -191,7 +192,7 @@ export function HeldGrants({ role }: { role: RoleDetail }) {
             ))}
           </nav>
           <div className="held-pane">
-            {sel === null ? <Spinner /> : sel === CLUSTER ? <ClusterPane cluster={data.cluster} /> : <DatabasePane key={sel} role={role.name} database={sel} />}
+            {sel === null ? <Spinner /> : sel === CLUSTER ? <ClusterPane role={role.name} cluster={data.cluster} /> : <DatabasePane key={sel} role={role.name} database={sel} />}
           </div>
         </div>
       )}

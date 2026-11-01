@@ -18,7 +18,7 @@ from .store import AppStore
 from .config import get_settings
 from .db import PoolManager
 from .errors import install_error_handlers
-from .routers import app_users, audit, auth, meta, permissions, reports, roles, snapshots, temporary
+from .routers import app_users, audit, auth, meta, ownership, permissions, reports, roles, snapshots, temporary
 from .routers import servers as servers_router
 from .servers import ServerRegistry, scoped_principal
 from .scheduler import scheduler_loop
@@ -103,6 +103,7 @@ def create_app() -> FastAPI:
     api.include_router(meta.router, dependencies=scoped)
     api.include_router(roles.router, dependencies=scoped)
     api.include_router(permissions.router, dependencies=scoped)
+    api.include_router(ownership.router, dependencies=scoped)
     api.include_router(reports.router, dependencies=scoped)
     api.include_router(temporary.router, dependencies=scoped)
     api.include_router(snapshots.router, dependencies=scoped)

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, enc, getCurrentServer, qs } from "./client";
 import type {
@@ -27,6 +28,12 @@ import type {
   DriftReport,
   HoldingsDetail,
   HoldingsSummary,
+  OwnedList,
+  OwnedType,
+  OwnerChangeResult,
+  OwnerFilterBody,
+  OwnerSummary,
+  ReassignResult,
   Snapshot,
   Stats,
   TemporaryItem,
@@ -337,4 +344,66 @@ export function useServerMutations(onDone?: () => void) {
     remove: useMutation({ mutationFn: (id: string) => api.del(`/servers/${enc(id)}`), onSuccess: onDone }),
     test: useMutation({ mutationFn: (b: Record<string, unknown>) => api.post<ServerTestResult>("/servers/test", b) }),
   };
+}
+
+/* ---------------------------------------------------------------- ownership */
+export interface OwnedParams { database?: string; type: OwnedType; schema?: string; owner?: string; q?: string; limit: number; offset: number }
+
+export const useOwnedObjects = (p: OwnedParams) =>
+  useQuery({
+    queryKey: ["ownership", "objects", p],
+    queryFn: ({ signal }) => api.get<OwnedList>("/ownership/objects", { ...p }, signal),
+    enabled: !!p.database,
+    placeholderData: keepPreviousData,
+    staleTime: 10_000,
+  });
+
+export const useOwnerSummary = (database: string | undefined) =>
+  useQuery({
+    queryKey: ["ownership", "summary", database],
+    queryFn: () => api.get<OwnerSummary>("/ownership/summary", { database }),
+    enabled: !!database,
+    staleTime: 10_000,
+  });
+
+const refreshOwnership = (qc: ReturnType<typeof useQueryClient>) => {
+  for (const key of ["ownership", "holdings", "perm", "databases", "roles"]) qc.invalidateQueries({ queryKey: [key] });
+};
+
+export function useChangeOwner() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { database: string; new_owner: string; items?: { object_type: OwnedType; oid: number }[]; filter?: OwnerFilterBody; dry_run?: boolean }) =>
+      api.post<OwnerChangeResult>("/ownership/change", v),
+    onSuccess: (r) => r.applied && refreshOwnership(qc),
+  });
+}
+
+export function useReassignOwner() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (v: { from_role: string; to_role: string; database?: string; dry_run?: boolean }) => api.post<ReassignResult>("/ownership/reassign", v),
+    onSuccess: (r) => r.applied && refreshOwnership(qc),
+  });
+}
+
+/** The database a page works on: the one remembered from last time, else the first one that is not the maintenance database. */
+const DB_KEY = "pgac-database";
+const savedDb = () => { try { return localStorage.getItem(DB_KEY); } catch { return null; } };
+
+export function useDatabaseChoice() {
+  const dbs = useDatabases();
+  const meta = useMeta();
+  const [database, setChosen] = useState<string>();
+  useEffect(() => {
+    if (database || !dbs.data) return;
+    const ok = dbs.data.filter((d) => d.connectable);
+    const saved = savedDb();
+    setChosen((ok.find((d) => d.name === saved) ?? ok.find((d) => d.name !== meta.data?.database) ?? ok[0])?.name);
+  }, [dbs.data, meta.data, database]);
+  const setDatabase = (name: string) => {
+    setChosen(name);
+    try { localStorage.setItem(DB_KEY, name); } catch { /* storage unavailable */ }
+  };
+  return { dbs, database, setDatabase };
 }

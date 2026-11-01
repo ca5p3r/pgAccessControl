@@ -399,3 +399,49 @@ export interface ServerFormValues {
   min_role: "viewer" | "operator" | "admin";
   disabled: boolean;
 }
+
+/* ---------------------------------------------------------------- ownership */
+export type OwnedType = "database" | "schema" | "table" | "sequence" | "function" | "type";
+
+export interface OwnedObject {
+  oid: number;
+  type: OwnedType;
+  schema: string;
+  name: string;
+  kind: string;
+  owner: string;
+  args: string;
+  extension: string | null; // belongs to this extension: its owner is not changed
+  linked_to: string | null; // sequence owned by this table's column: it follows the table
+  linked_oid: number | null;
+}
+
+export interface OwnedList {
+  items: OwnedObject[];
+  total: number;
+}
+
+export interface OwnerSummary {
+  owners: { owner: string; kind: "user" | "role"; superuser: boolean; counts: Partial<Record<OwnedType, number>>; total: number }[];
+}
+
+export interface OwnerFilterBody {
+  object_type: OwnedType;
+  schema?: string;
+  owner?: string;
+  q?: string;
+}
+
+export interface OwnerChangeResult {
+  applied: boolean;
+  changed: number;
+  statements: string[];
+  skipped: { object: string; reason: string }[];
+  objects: { object: string; from: string }[];
+}
+
+export interface ReassignResult {
+  applied: boolean;
+  places: Record<string, number>;
+  statements: string[];
+}

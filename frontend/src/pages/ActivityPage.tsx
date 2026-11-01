@@ -11,6 +11,7 @@ const CATEGORIES = [
   { value: "", label: "All activity" },
   { value: "role.", label: "Role & user changes" },
   { value: "permission.", label: "Permission changes" },
+  { value: "ownership.", label: "Ownership changes" },
   { value: "auth.", label: "Sign-ins" },
   { value: "access.", label: "Temporary access" },
   { value: "snapshot.", label: "Snapshots" },

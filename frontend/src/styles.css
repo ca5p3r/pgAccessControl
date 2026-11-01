@@ -669,3 +669,47 @@ a.stat:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
 .test-warnings { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; font-size: 12.5px; color: var(--warn); }
 .test-warnings li { display: flex; gap: 6px; align-items: flex-start; } .test-warnings svg { margin-top: 2px; flex: none; }
 .form-section.first { margin-top: 0; padding-top: 0; border-top: 0; }
+
+/* ownership */
+.table th.chk, .table td.chk { width: 44px; padding-right: 0; }
+.table td.chk input, .table th.chk input { accent-color: var(--primary); width: 16px; height: 16px; }
+.select-banner { padding: 9px 14px; border-radius: 10px; background: var(--primary-soft); color: var(--primary-text); font-size: 13.5px; text-align: center; }
+.owner-link { display: inline-flex; align-items: center; gap: 8px; padding: 2px 6px 2px 2px; border: 0; background: transparent; border-radius: 999px; color: inherit; }
+.owner-link:hover { background: var(--primary-soft); color: var(--primary-text); }
+.table tr.row-pending td { background: color-mix(in srgb, var(--primary-soft) 55%, var(--surface)); }
+.held-item.dim { opacity: 0.55; }
+.own-head-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.own-db { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.own-overview { padding: 16px 18px; display: grid; gap: 14px; }
+.own-bar { display: flex; gap: 2px; height: 10px; border-radius: 999px; overflow: hidden; background: var(--surface-2); }
+.own-bar span { height: 100%; min-width: 4px; transition: opacity 0.15s; }
+.own-legend { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.own-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 280px; padding: 5px 11px 5px 9px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--text); font-size: 13px; }
+.own-chip:hover { border-color: var(--primary); }
+.own-chip.on { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-text); }
+.own-chip i { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+.own-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.own-chip b { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--muted); }
+.own-more { font-size: 12.5px; }
+.own-toolbar { gap: 12px; }
+.own-toolbar .search { flex: 1 1 280px; max-width: 460px; }
+.own-owner-pick { width: 280px; max-width: 100%; }
+.own-table { table-layout: fixed; }
+.own-table col.c-chk { width: 46px; }
+.own-table col.c-owner { width: 30%; }
+.own-table col.c-notes { width: 150px; }
+.own-table td { padding-top: 8px; padding-bottom: 8px; overflow: hidden; }
+.own-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 13px; }
+.own-name strong { font-weight: 600; }
+.own-schema { color: var(--muted); }
+.own-owner-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.own-table .owner-link { max-width: 100%; }
+@media (max-width: 760px) { .own-table col.c-notes { width: 90px; } .own-table col.c-owner { width: 38%; } }
+.role-choice { display: grid; gap: 8px; }
+.role-list { max-height: min(220px, 30vh); overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.role-opt { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 12px; border: 0; border-bottom: 1px solid var(--border); background: transparent; text-align: left; color: inherit; }
+.role-opt:last-child { border-bottom: 0; }
+.role-opt:hover, .role-opt:focus-visible { background: var(--primary-soft); color: var(--primary-text); outline: none; }
+.role-opt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.role-empty { padding: 12px; text-align: center; font-size: 13px; color: var(--muted); }
+.role-chosen { display: flex; align-items: center; gap: 10px; min-height: 42px; padding: 7px 12px; border: 1px solid var(--primary); background: var(--primary-soft); border-radius: var(--radius-sm); }

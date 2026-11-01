@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { ClipboardList, History, Hourglass, KeyRound, LayoutDashboard, Lock, LockKeyhole, LogOut, Menu, Moon, Server, ShieldCheck, Sun, UserCog, UserRound, Users } from "lucide-react";
+import { ClipboardList, Crown, History, Hourglass, KeyRound, LayoutDashboard, Lock, LockKeyhole, LogOut, Menu, Moon, Server, ShieldCheck, Sun, UserCog, UserRound, Users } from "lucide-react";
 import { api } from "../api/client";
 import type { AuthState } from "../api/types";
 import { useAuth, useIsAdmin, useMeta } from "../api/hooks";
@@ -14,6 +14,7 @@ const NAV = [
   { to: "/users", label: "Users", icon: UserRound },
   { to: "/roles", label: "Roles", icon: Users },
   { to: "/permissions", label: "Permissions", icon: KeyRound },
+  { to: "/ownership", label: "Ownership", icon: Crown },
   { to: "/reports", label: "Reports", icon: ClipboardList },
   { to: "/temporary", label: "Temporary access", icon: Hourglass },
   { to: "/activity", label: "Activity", icon: History },

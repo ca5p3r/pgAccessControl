@@ -20,6 +20,8 @@ const ACTIONS: Record<string, { label: string; tone: "success" | "primary" | "da
   "role.delete": { label: "Deleted", tone: "danger" },
   "role.membership": { label: "Membership", tone: "info" },
   "permission.apply": { label: "Permissions", tone: "primary" },
+  "ownership.change": { label: "Ownership", tone: "primary" },
+  "ownership.reassign": { label: "Ownership", tone: "warn" },
   "auth.login": { label: "Sign-in", tone: "neutral" },
   "auth.logout": { label: "Sign-out", tone: "neutral" },
   "auth.login_failed": { label: "Failed sign-in", tone: "warn" },

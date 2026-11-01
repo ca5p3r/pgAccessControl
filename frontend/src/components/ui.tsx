@@ -190,8 +190,10 @@ export function Pagination({ page, pageSize, total, onPage }: { page: number; pa
 
 /* ---------------------------------------------------------------- Avatar */
 const HUES = [248, 200, 160, 20, 330, 280, 40, 180];
+/** The colour a name gets everywhere (avatars, charts), so the same person always looks the same. */
+export const hueFor = (name: string) => HUES[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length];
 export function Avatar({ name, kind, size = 36 }: { name: string; kind?: "user" | "role"; size?: number }) {
-  const hue = useMemo(() => HUES[[...name].reduce((a, c) => a + c.charCodeAt(0), 0) % HUES.length], [name]);
+  const hue = useMemo(() => hueFor(name), [name]);
   const initials = name.replace(/[^a-zA-Z0-9]+/g, " ").trim().slice(0, 2).toUpperCase() || "?";
   return (
     <span

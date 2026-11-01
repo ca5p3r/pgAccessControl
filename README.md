@@ -16,6 +16,7 @@ A web console for managing **PostgreSQL roles, users and permissions** — React
 | Manage **several PostgreSQL servers** and switch between them | The **server switcher** (top of the sidebar, `Alt+S`) and the *Servers* page (admin) |
 | Set **column-level** privileges, **grant option** and **grantor** | *columns* link on a table row; *Grant option* mode; Review → Advanced |
 | See everything a user or role **holds** (owned objects, grants, default privileges, grants it gave to others), e.g. before deleting it | A role's **Held grants** tab; the delete dialog links to it |
+| See and change **who owns** tables, views, sequences, functions, types, schemas and databases; hand everything a role owns to another role | The **Ownership** page (also linked from a role's *Held grants* tab) |
 | See **who changed what**, with the SQL and before/after values | *Activity* page, and a role's **Activity** tab  |
 | Find out **who can access** a table, view, sequence, function, schema or database | *Reports* → Who has access? (also a link on every grid row) |
 | **Export** permissions as SQL, CSV or JSON (whole database or one user/role) | *Reports* → Export, or the Export button on a role's Permissions tab |
@@ -123,6 +124,8 @@ Anyone who signs in is a **viewer**, **operator** or **admin**:
 | Look at users, roles, permissions, reports, activity, snapshots | ✔ | ✔ | ✔ |
 | Grant / revoke, change memberships, create and edit everyday roles, temporary access, snapshots | | ✔ | ✔ |
 | Set `SUPERUSER`, `CREATEROLE`, `REPLICATION`, `BYPASSRLS`; modify or hand out privileged roles (superusers, `CREATEROLE`, `pg_execute_server_program`, `pg_read_all_data`, …) | | | ✔ |
+| Change the owner of tables, views, sequences, functions and types between ordinary roles | | ✔ | ✔ |
+| Change the owner of schemas and databases, hand over everything a role owns, or involve a privileged role | | | ✔ |
 | Delete roles; manage console accounts | | | ✔ |
 
 Operators cannot escalate: they cannot reset the password of a privileged role, add anyone to one, or create one. Roles are checked on every request, so disabling an account or changing its role takes effect immediately.
@@ -146,6 +149,17 @@ PostgreSQL can only expire passwords, so the app keeps a schedule and a backgrou
 *Reports → Snapshots & drift*: **Take snapshot** saves roles, memberships, privileges (including columns) and default privileges of a database; passwords are never part of it. Open a snapshot to **compare it with the live server** (or with another snapshot) and see everything added, removed or changed since, including changes made directly with `psql` that the audit history cannot see. **Remediation SQL** shows what would restore the snapshot; it is only a script, never executed by the app, and it suggests (but never emits) `DROP ROLE` for roles created since.
 
 Mark a snapshot as the **baseline** (the approved state) and set `DRIFT_CHECK_INTERVAL_MINUTES` to compare it automatically. New drift is written once to *Activity* (`drift.detected`) and to the server log for your alerting, and `drift.cleared` when it matches again.
+
+## Object ownership
+
+An owner can always grant, alter and drop its object whatever the ACL says, and a role that still owns objects cannot be dropped, so ownership deserves its own page.
+
+* **Browse**: pick a database, then a type (tables & views, sequences, functions, types, schemas, databases). The list on the left shows who owns how many objects; click a name (or an owner in the table) to filter. Search by name and filter by schema.
+* **Change owner**: tick objects (or *Select all N matching* to cover a whole filter, up to 5,000 objects), choose the new owner and review the exact `ALTER ... OWNER TO` statements first. All of them run in one transaction, so a failure changes nothing. Production servers ask for the extra confirmation as usual.
+* **Left alone, and why**: a sequence owned by a table column follows its table (PostgreSQL refuses to move it separately, and moves it together with the table), objects that belong to an extension keep the extension's owner, and objects the role already owns are skipped. The preview lists each of them with the reason.
+* **Transfer everything** (admin): `REASSIGN OWNED BY old TO new` in every database where the old role owns something, or in one database. PostgreSQL also hands over *databases and tablespaces* the role owns whichever database it runs in; the dialog says so. It runs per database, so a failure in a later database leaves earlier ones handed over (the error names them).
+* **Rights**: operators may hand over tables, views, sequences, functions and types between ordinary roles; schemas, databases and anything involving a privileged role (superuser, `CREATEROLE`, …) need an admin. Previews are not recorded; every change appears in **Activity** as `ownership.change` / `ownership.reassign` with the objects and the SQL.
+* Not covered: tablespaces, foreign data wrappers/servers, event triggers, publications and other rarely owned objects. *Transfer everything* does move those.
 
 ## Fine-grained permissions
 
@@ -196,7 +210,7 @@ Not covered: row-level-security policies, large-object and type privileges, fore
 
 ## API
 
-Interactive docs at `/api/docs`. Main resources: `GET/POST /api/roles`, `GET/PATCH/DELETE /api/roles/{name}`, `PUT /api/roles/{name}/member-of`, `PUT /api/roles/{name}/members`, `GET /api/roles/{name}/dependencies`, `GET /api/permissions/{role}/objects`, `GET /api/permissions/{role}/default-privileges`, `POST /api/permissions/{role}/apply` (`dry_run` supported), `GET /api/audit` (+ `/facets`, `/export`), `GET /api/access-report`, `GET /api/objects`, `GET /api/export`, `GET /api/databases`, `GET /api/schemas`, `GET /api/meta`, `GET /api/health`.
+Interactive docs at `/api/docs`. Main resources: `GET/POST /api/roles`, `GET/PATCH/DELETE /api/roles/{name}`, `PUT /api/roles/{name}/member-of`, `PUT /api/roles/{name}/members`, `GET /api/roles/{name}/dependencies`, `GET /api/permissions/{role}/objects`, `GET /api/permissions/{role}/default-privileges`, `POST /api/permissions/{role}/apply` (`dry_run` supported), `GET /api/audit` (+ `/facets`, `/export`), `GET /api/ownership/objects`, `GET /api/ownership/summary`, `POST /api/ownership/change` (`dry_run` supported), `POST /api/ownership/reassign` (`dry_run` supported), `GET /api/access-report`, `GET /api/objects`, `GET /api/export`, `GET /api/databases`, `GET /api/schemas`, `GET /api/meta`, `GET /api/health`.
 
 ## Project layout
 
